@@ -16,22 +16,20 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.core.validation import validate_and_sniff
-from app.database import SessionLocal
+from app.database import session_scope
 from app.models import Document, DocumentFile, DocType, DocumentStatus
 from app.schemas.document import DocumentOut, DocumentSummary
 from app.services import storage
+from app.services.application_service import get_or_create_by_case_id
 from app.services.extraction import extraction_service
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
 def _run_extraction(document_id: uuid.UUID) -> None:
-    """Background entry point — uses its own DB session."""
-    db = SessionLocal()
-    try:
+    """Background entry point — uses its own transactional session."""
+    with session_scope() as db:
         extraction_service.run(db, document_id)
-    finally:
-        db.close()
 
 
 def _parse_doc_type(doc_type: str) -> str:
@@ -71,9 +69,14 @@ async def create_document(
     background: BackgroundTasks,
     doc_type: str = Form(...),
     files: list[UploadFile] = File(...),
+    case_id: str | None = Form(None),
     db: Session = Depends(get_db),
 ) -> Document:
-    """Upload one or many files as a single logical document."""
+    """Upload one or many files as a single logical document.
+
+    An optional `case_id` groups the document with others under one application
+    (get-or-create), so a passport + G-28 share the same case.
+    """
     if not files:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="At least one file is required."
@@ -81,6 +84,9 @@ async def create_document(
     doc_type_value = _parse_doc_type(doc_type)
 
     document = Document(doc_type=doc_type_value, status=DocumentStatus.uploaded.value)
+    if case_id and case_id.strip():
+        application = get_or_create_by_case_id(db, case_id.strip())
+        document.application_id = application.id
     db.add(document)
     db.flush()  # assign document.id before saving files
 

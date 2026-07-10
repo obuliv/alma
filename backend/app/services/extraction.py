@@ -2,25 +2,25 @@
 
 The upload flow already drives status transitions and persists an
 ExtractionResult, so step 2 only needs to replace `_extract` with real logic
-that reads a document's files and returns structured `data`.
+that reads a document's files and returns a `data` dict.
+
+Form-agnostic by design: extraction returns **whatever keys the LLM finds** in
+the document — there is no fixed field list. The fill-time mapper (stream 3)
+takes these keys and the target form's field keys and generates the mapping, so
+neither side is tied to a specific form or schema.
+
+Wiring for stream 2 is in place: read a document's files via
+`app.services.storage.read_file`, pass them as attachments to
+`get_llm_client().complete_json(...)`, and return the parsed dict.
 """
 import uuid
 
 from sqlalchemy.orm import Session
 
+from app.core.logging import get_logger
 from app.models import Document, DocumentStatus, ExtractionResult
 
-# Fields step 2 is expected to populate. Kept here as documentation of the
-# target schema; the placeholder emits empty strings so the UI can render it.
-EXPECTED_FIELDS = (
-    "full_name",
-    "date_of_birth",
-    "country",
-    "passport_number",
-    "address",
-    "attorney_name",
-    "firm",
-)
+logger = get_logger(__name__)
 
 
 class ExtractionService:
@@ -49,8 +49,19 @@ class ExtractionService:
         db.commit()
 
     def _extract(self, db: Session, document: Document) -> tuple[dict, str | None]:
-        """STUB: return placeholder fields. Replace with OCR/LLM in step 2."""
-        return {field: "" for field in EXPECTED_FIELDS}, None
+        """STUB: return an empty dict. Replace with OCR/LLM in step 2.
+
+        Stream 2 replaces this body with, roughly:
+            client = get_llm_client()
+            attachments = [(storage.read_file(f.file_path), f.content_type)
+                           for f in document.files]
+            data = client.complete_json(system=<prompt for doc_type>,
+                                        user="Extract all fields as JSON.",
+                                        attachments=attachments)
+        `data` keys are whatever the LLM returns — no fixed schema.
+        """
+        logger.info("extraction stub for document %s (%s)", document.id, document.doc_type)
+        return {}, None
 
     def _store(
         self,

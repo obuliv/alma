@@ -7,6 +7,7 @@ interface Props {
 
 export default function UploadForm({ onUploaded }: Props) {
   const [docType, setDocType] = useState<DocType>("passport");
+  const [caseId, setCaseId] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -18,7 +19,7 @@ export default function UploadForm({ onUploaded }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await uploadDocument(docType, files);
+      await uploadDocument(docType, files, caseId);
       setFiles([]);
       if (inputRef.current) inputRef.current.value = "";
       onUploaded();
@@ -32,6 +33,15 @@ export default function UploadForm({ onUploaded }: Props) {
   return (
     <form className="card" onSubmit={handleSubmit}>
       {error && <div className="error">{error}</div>}
+
+      <label htmlFor="case-id">Case ID (optional — groups passport + G-28)</label>
+      <input
+        id="case-id"
+        type="text"
+        placeholder="e.g. CASE-1024"
+        value={caseId}
+        onChange={(e) => setCaseId(e.target.value)}
+      />
 
       <label htmlFor="doc-type">Document type</label>
       <select

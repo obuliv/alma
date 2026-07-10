@@ -13,7 +13,8 @@ slot in without schema/API rework:
 - **Form population** via browser automation (step 3) — `backend/app/services/form_fill.py`
 
 When implementing those, fill in the existing stub methods; do not restructure
-the models or upload flow around them.
+the models or upload flow around them. Shared plumbing both streams depend on is
+already built — reuse it (see "Shared utils & the seam" below).
 
 ## Commands
 
@@ -78,20 +79,43 @@ files and produces one merged result.
 - `documents` — logical doc; `doc_type` ∈ {`passport`, `g28`}, `status` drives
   the lifecycle `uploaded → extracting → extracted | failed`.
 - `document_files` — the actual uploaded pages, ordered by `page_order`.
-- `extraction_results` — one row per document, `data` is **JSONB** so step 2 can
-  change the field set without a migration. `ExtractionService.EXPECTED_FIELDS`
-  documents the target schema.
+- `extraction_results` — one row per document, `data` is **JSONB** holding
+  whatever keys the LLM extracts (form-agnostic, no fixed field list).
+- `applications.case_id` — human-entered Case ID (optional at upload). Groups a
+  passport + G-28 into one application so form-fill can select data by case.
 
 Enums are stored as plain strings validated in Python (see the `enum.Enum`
 classes in the model files), not Postgres enum types — keeps migrations simple.
 
+### Shared utils & the seam (how the two streams connect)
+
+Built and meant for reuse — do not re-invent these in the workstreams:
+
+- `app/services/llm.py` — provider-agnostic `LLMClient` (ABC) + `AnthropicLLMClient`,
+  via `get_llm_client()` (selected by `settings.llm_provider`). `complete_json(...,
+  attachments=[(bytes, media_type)])` serves **both** vision extraction (stream 2)
+  and text field-mapping (stream 3). Failures raise `LLMError`.
+- `app/database.py::session_scope()` — transactional session for out-of-request
+  work (background tasks, the automation worker). Commits/rolls back/closes.
+- `app/core/logging.py` (`configure_logging`/`get_logger`) and
+  `app/core/errors.py` (`AppError` + `ExtractionError`/`FormFillError`/`LLMError`,
+  mapped to JSON by a handler in `main.py`).
+
+**The seam:** extraction writes loose-JSONB `extraction_results.data` with
+whatever keys the LLM finds (form-agnostic — no fixed vocabulary). Grouping is by
+`case_id`. Automation's input is `application_service.build_application_data()`,
+which merges each doc's data into `{"passport": {...}, "g28": {...}}`. At fill
+time the LLM is given **two key-sets** — the extracted-data keys and the scraped
+form's field keys — and generates the mapping between them. This is why the JSONB
+stays untyped and nothing is tied to a specific form.
+
 ### Upload flow (`backend/app/api/routes/documents.py`)
 
-`POST /api/documents` (multipart: `doc_type` + one-or-many `files`) creates one
-`documents` row + N `document_files`, then fires extraction **once** as a
-FastAPI `BackgroundTask`. Key detail: the background task opens its **own**
-`SessionLocal` (`_run_extraction`) because the request-scoped `get_db` session is
-already closed by the time it runs.
+`POST /api/documents` (multipart: `doc_type` + one-or-many `files` + optional
+`case_id`) creates one `documents` row + N `document_files`, then fires
+extraction **once** as a FastAPI `BackgroundTask`. Key detail: the background
+task uses `session_scope()` (`_run_extraction`) rather than the request-scoped
+`get_db` session, which is already closed by the time it runs.
 
 Every uploaded file is validated by **magic bytes**, not the client-supplied
 content type — `app/core/validation.py` uses `filetype.guess()` and returns the
@@ -100,7 +124,14 @@ canonical content type we store. A renamed `.txt` is rejected with 400.
 Migrations run automatically on container start (the api `CMD` runs
 `alembic upgrade head` before uvicorn).
 
-### Frontend (`frontend/src/`)
+### Browser-automation worker (stream 3)
+
+`form_fill.py` runs in a **separate `automation` container**
+(`automation/Dockerfile`, Playwright base image) under the compose `worker`
+profile — it is not started by `docker compose up`. This keeps heavy browser
+deps out of the `api` image, so `form_fill.py` imports Playwright **lazily**
+inside `fill()`; never add a top-level `playwright` import (it would break the
+api image). Build it with `docker compose --profile worker build automation`.
 
 Minimal React SPA. `api/client.ts` is the single fetch wrapper (same-origin
 `/api`). `DocumentList.tsx` **polls** `GET /api/documents` every 2.5s so status
@@ -113,6 +144,10 @@ websockets. `UploadForm.tsx` uses `<input multiple>` for the multi-file case.
   `alembic/versions/0001_initial.py`), and `alembic/env.py` reads the URL from
   `app.config.settings`. When you change a model, generate a migration with
   `--autogenerate` and review it.
-- Config is centralized in `app/config.py` (pydantic-settings). Add new tunables
-  there and surface them in `.env.example` + `docker-compose.yml`, not as
-  scattered `os.getenv` calls.
+- Config is centralized in `app/config.py` (pydantic-settings), read from env /
+  `.env`. Changing a value is `.env`-only; **adding** a knob means declaring the
+  field once here (with a default), then surfacing it in `.env.example` +
+  `docker-compose.yml`. Never scatter `os.getenv` calls.
+- The DB is treated as **disposable** in dev — `case_id` was folded into
+  `0001_initial` rather than added as a new migration. Recreate with
+  `docker compose down -v && up`.

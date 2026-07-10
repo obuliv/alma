@@ -61,10 +61,12 @@ export async function getDocument(id: string): Promise<Document> {
 export async function uploadDocument(
   docType: DocType,
   files: FileList | File[],
+  caseId?: string,
 ): Promise<Document> {
   const form = new FormData();
   form.append("doc_type", docType);
   for (const file of Array.from(files)) form.append("files", file);
+  if (caseId && caseId.trim()) form.append("case_id", caseId.trim());
   return handle(
     await fetch("/api/documents", { method: "POST", body: form }),
   );

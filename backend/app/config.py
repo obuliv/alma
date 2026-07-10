@@ -24,6 +24,19 @@ class Settings(BaseSettings):
     # this is a convenience for running the frontend dev server separately.
     cors_origins: str = ""
 
+    # --- LLM (shared by extraction + form-fill mapping) ---
+    # Values/secrets come from .env; only defaults live here.
+    llm_provider: str = "anthropic"
+    anthropic_api_key: str = ""
+    llm_model: str = "claude-opus-4-8"
+    llm_max_tokens: int = 4096
+    llm_timeout_s: int = 60
+
+    # --- Browser automation (stream 3) ---
+    form_url: str = ""
+    browser_headless: bool = True
+    browser_timeout_ms: int = 30000
+
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024

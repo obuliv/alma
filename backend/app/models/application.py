@@ -22,6 +22,11 @@ class Application(TimestampMixin, Base):
     __tablename__ = "applications"
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    # Human-entered identifier used to group a passport + G-28 at upload time and
+    # to select which application's data to use at form-fill time.
+    case_id: Mapped[str | None] = mapped_column(
+        String(128), unique=True, index=True, nullable=True
+    )
     status: Mapped[str] = mapped_column(
         String(32), default=ApplicationStatus.new.value, nullable=False
     )

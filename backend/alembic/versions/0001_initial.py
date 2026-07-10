@@ -21,12 +21,14 @@ def upgrade() -> None:
     op.create_table(
         "applications",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("case_id", sa.String(length=128), nullable=True),
         sa.Column("status", sa.String(length=32), nullable=False),
         sa.Column("form_url", sa.String(length=2048), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
     )
+    op.create_index("ix_applications_case_id", "applications", ["case_id"], unique=True)
 
     op.create_table(
         "documents",
@@ -76,4 +78,5 @@ def downgrade() -> None:
     op.drop_table("document_files")
     op.drop_index("ix_documents_application_id", table_name="documents")
     op.drop_table("documents")
+    op.drop_index("ix_applications_case_id", table_name="applications")
     op.drop_table("applications")

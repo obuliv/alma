@@ -58,11 +58,33 @@ Then open:
 | `GET`    | `/api/documents/{id}`                 | Document detail incl. files and extraction. |
 | `GET`    | `/api/documents/{id}/files/{file_id}` | Stream a stored file.                      |
 | `DELETE` | `/api/documents/{id}/files/{file_id}` | Remove a mistakenly-added page.            |
+| `GET`    | `/api/applications`                   | List applications (cases).                  |
+| `GET`    | `/api/applications/{case_id}`         | Case documents + merged, fill-ready data.   |
 | `GET`    | `/api/health`                         | Liveness + DB check.                        |
 
-`POST /api/documents` is `multipart/form-data` with `doc_type` and one or more
-`files`. Each file is validated by **magic bytes** (not the client-supplied
-content type) and against the `MAX_UPLOAD_MB` limit.
+`POST /api/documents` is `multipart/form-data` with `doc_type`, one or more
+`files`, and an optional `case_id`. Each file is validated by **magic bytes**
+(not the client-supplied content type) and against the `MAX_UPLOAD_MB` limit.
+
+### Cases and the extraction → automation seam
+
+An optional **Case ID** entered at upload groups a passport + G-28 under one
+application (get-or-create). `GET /api/applications/{case_id}` returns the merged
+extraction data keyed by document type — `{"passport": {...}, "g28": {...}}` —
+which is what the form-fill step consumes.
+
+The design is **form-agnostic**: extraction stores whatever keys the LLM finds
+(loose JSONB, no fixed field list). At fill time the LLM is given **two sets of
+dict keys** — the extracted-data keys and the target form's field keys — and
+generates the mapping between them. Neither side is tied to a specific form or
+schema.
+
+## Configuration
+
+All settings are read from the environment / `.env` (see `.env.example`).
+Changing a value is `.env`-only; the fields are declared once in
+`backend/app/config.py`. Notable keys: `ANTHROPIC_API_KEY`, `LLM_MODEL`,
+`FORM_URL`, `BROWSER_HEADLESS`. Secrets live in `.env` (gitignored).
 
 ## Testing it end-to-end
 
@@ -77,12 +99,26 @@ content type) and against the `MAX_UPLOAD_MB` limit.
 
 ## Next phases (scaffolded, not implemented)
 
+Shared plumbing both streams use is in place: a provider-agnostic LLM client
+(`backend/app/services/llm.py`, `get_llm_client()`), `session_scope()` for
+out-of-request DB work, structured logging (`app/core/logging.py`), and domain
+errors (`app/core/errors.py`).
+
 - **Data extraction** — `backend/app/services/extraction.py`. The upload flow
   already drives `extracting → extracted/failed` and persists an
-  `ExtractionResult`; step 2 replaces `_extract` with real OCR/LLM logic that
-  reads a document's files and returns the structured `data` fields.
-- **Form population** — `backend/app/services/form_fill.py`. Entry point for
-  browser automation (e.g. Playwright) against the target form URL.
+  `ExtractionResult`; stream 2 replaces `_extract` with real vision-LLM logic
+  (read a document's files via `storage.read_file`, pass as attachments to
+  `get_llm_client().complete_json(...)`).
+- **Form population** — `backend/app/services/form_fill.py`, run in the
+  **`automation`** container (`automation/Dockerfile`, Playwright preinstalled).
+  It consumes `build_application_data(application)` and uses the LLM to map keys
+  to form fields. Import-safe: Playwright is imported lazily so the `api` image
+  needs no browser deps.
+
+```bash
+# Build the Playwright worker image (not started by default):
+docker compose --profile worker build automation
+```
 
 ## Running without Docker (optional)
 
