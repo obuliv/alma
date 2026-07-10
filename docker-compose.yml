@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-alma}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-alma}
+      POSTGRES_DB: ${POSTGRES_DB:-alma}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-alma} -d ${POSTGRES_DB:-alma}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-alma}:${POSTGRES_PASSWORD:-alma}@db:5432/${POSTGRES_DB:-alma}
+      UPLOAD_DIR: /data/uploads
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-10}
+    volumes:
+      - uploads:/data/uploads
+    ports:
+      - "8000:8000"   # exposed for direct API access / Swagger at /docs
+
+  web:
+    build: ./frontend
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+
+volumes:
+  pgdata:
+  uploads:
