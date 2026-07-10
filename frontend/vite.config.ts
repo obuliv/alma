@@ -1,8 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// During `vite dev` (outside Docker), proxy /api to the local backend so the
-// frontend runs single-origin, matching the nginx setup used in production.
+// During `vite dev`, proxy /api to the local backend so the browser sees
+// same-origin requests and there's no CORS to configure.
 export default defineConfig({
   plugins: [react()],
   server: {

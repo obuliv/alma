@@ -5,10 +5,9 @@ extraction data onto those fields, fills them in a **headed** browser, and
 leaves the window open for the user to review/correct/submit.
 
 Import-safe by design: Playwright is imported lazily inside `fill`, so this
-module imports cleanly even where Playwright isn't installed (e.g. the Docker
-`api` image). A visible browser window requires a display, so `fill` is meant
-to run from a host process (e.g. `uvicorn` on your machine), not the headless
-`api` container.
+module imports cleanly even where Playwright isn't installed. A visible
+browser window requires a display, so `fill` is meant to run from a process
+with one (e.g. `uvicorn` on your machine), not a headless server/CI box.
 
 Form-agnostic: nothing here assumes a specific form or a fixed set of
 extracted fields. The mapping is generated from **two sets of dict keys** —

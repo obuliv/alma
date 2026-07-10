@@ -9,7 +9,6 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects import postgresql
 
 revision: str = "0002_form_fill_runs"
 down_revision: Union[str, None] = "0001_initial"
@@ -20,12 +19,12 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.create_table(
         "form_fill_runs",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("application_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), nullable=False),
+        sa.Column("application_id", sa.Uuid(as_uuid=True), nullable=False),
         sa.Column("form_url", sa.String(length=2048), nullable=False),
         sa.Column("status", sa.String(length=32), nullable=False),
-        sa.Column("fields", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-        sa.Column("mapping", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("fields", sa.JSON(), nullable=False),
+        sa.Column("mapping", sa.JSON(), nullable=False),
         sa.Column("error", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
