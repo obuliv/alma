@@ -7,3 +7,6 @@ pydantic-settings==2.7.1
 python-multipart==0.0.20
 filetype==1.2.0
 anthropic==0.42.0
+pypdfium2==4.30.1
+pillow==11.1.0
+rapidocr-onnxruntime==1.4.4

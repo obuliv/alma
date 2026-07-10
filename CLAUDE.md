@@ -5,14 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A document-upload platform for passport and G-28 documents (PDF/JPEG/PNG). This
-repo implements the **foundation**: upload interface, database layer, and
-Dockerized deployment. Two later phases are intentionally left as stubs so they
-slot in without schema/API rework:
+repo implements the **foundation** (upload interface, database layer, Dockerized
+deployment) plus **data extraction** (step 2, `backend/app/services/extraction.py`).
+One later phase remains a stub so it slots in without schema/API rework:
 
-- **Data extraction** (step 2) — `backend/app/services/extraction.py`
 - **Form population** via browser automation (step 3) — `backend/app/services/form_fill.py`
 
-When implementing those, fill in the existing stub methods; do not restructure
+When implementing that, fill in the existing stub methods; do not restructure
 the models or upload flow around them. Shared plumbing both streams depend on is
 already built — reuse it (see "Shared utils & the seam" below).
 
@@ -123,6 +122,32 @@ canonical content type we store. A renamed `.txt` is rejected with 400.
 
 Migrations run automatically on container start (the api `CMD` runs
 `alembic upgrade head` before uvicorn).
+
+### Extraction pipeline (`backend/app/services/extraction.py`)
+
+Every document is reduced to text, then one `complete_json` call turns the text
+into the flat, form-agnostic `data` dict (no fixed field list — see "The seam"
+above). Per file, `_file_to_text`:
+1. PDF → try the embedded text layer (`app/services/text_extraction.py`,
+   pypdfium2). Used as-is if it clears a min-length threshold.
+2. Otherwise (scanned PDF or image upload) → the configured OCR engine
+   (`app/services/ocr.py::get_ocr_engine()`, selected by `OCR_MODE`) turns page
+   images into text: `llm` (default) sends them to Claude vision via
+   `LLMClient.complete_vision`; `rapidocr` runs local PP-OCR models
+   (`rapidocr-onnxruntime`, no external call — model weights auto-download on
+   first use).
+
+`raw_text` is always persisted on `ExtractionResult`, regardless of which path
+produced it. The doc-type → system-prompt lookup (`_SYSTEM_PROMPTS`) has no
+fallback — an unrecognized `doc_type` raises immediately rather than silently
+extracting with the wrong template; this is safe today because the API layer
+(`_parse_doc_type`) already only accepts values in the `DocType` enum.
+
+Gotcha: `rapidocr-onnxruntime` hard-depends on `opencv-python` (not
+`-headless`), which needs `libGL`/`libglib` — pinning the headless variant
+alongside it doesn't help, since pip won't dedupe two differently-named
+packages that both provide `cv2`. The Dockerfile installs `libgl1
+libglib2.0-0` instead of fighting this.
 
 ### Browser-automation worker (stream 3)
 

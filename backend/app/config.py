@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 4096
     llm_timeout_s: int = 60
 
+    # Text-extraction engine used when a PDF has no embedded text layer, or for
+    # image uploads: "llm" (Claude vision transcribes the page) or "rapidocr"
+    # (local PP-OCR models via onnxruntime, no external API call).
+    ocr_mode: str = "llm"
+
     # --- Browser automation (stream 3) ---
     form_url: str = ""
     browser_headless: bool = True
