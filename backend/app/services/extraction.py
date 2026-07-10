@@ -28,6 +28,7 @@ from app.core.logging import get_logger
 from app.models import Document, DocumentStatus, ExtractionResult
 from app.services import storage, text_extraction
 from app.services.llm import get_llm_client
+from app.services.mrz import extract_mrz_fields
 from app.services.ocr import get_ocr_engine
 
 logger = get_logger(__name__)
@@ -38,6 +39,16 @@ _PASSPORT_SYSTEM = (
     "field you can identify, using clear snake_case keys — for example "
     "surname, given_names, passport_number, nationality, date_of_birth, sex, "
     "place_of_birth, date_of_issue, date_of_expiry, issuing_authority. "
+    "If the source document is not in English, render field values in "
+    "English: proper nouns (personal names and place names) must be "
+    "transliterated into Latin-alphabet characters — kept as the same "
+    "real-world name or place, not swapped for a different English "
+    "equivalent, just spelled out in Latin script if the original wasn't "
+    "already; all other, descriptive or categorical values (e.g. sex/gender "
+    "terms, document-type labels, issuing-authority names, place-name "
+    "descriptors like \"City\" or \"Province\") should be translated to "
+    "plain English. Put only the English/transliterated value in the JSON "
+    "— do not include the original-language text alongside it. "
     "Include any additional fields present in the text even if not listed "
     "here. Omit fields you cannot find; do not guess or hallucinate values."
 )
@@ -65,8 +76,26 @@ _FORM_FIELD_BOOLEAN_NOTE = (
     "context (nearby label text), not the raw field_name."
 )
 
-_PASSPORT_SYSTEM += _FORM_FIELD_BOOLEAN_NOTE
-_G28_SYSTEM += _FORM_FIELD_BOOLEAN_NOTE
+# Normalizing dates here, rather than downstream at form-fill time, is
+# deliberate: this is the only point in the pipeline where the LLM still has
+# the whole document in front of it (issuing country, layout, other context)
+# to resolve a numeric day/month ambiguity. By the time a value reaches the
+# form-fill mapper it's a bare string under a key name — that context is
+# gone, so it can only reformat, not disambiguate.
+_DATE_NORMALIZATION_NOTE = (
+    " Normalize every date value to ISO 8601 (\"YYYY-MM-DD\"), regardless of "
+    "how it is printed in the source. When a numeric date is ambiguous "
+    "between day-first and month-first (e.g. \"04/05/2025\"), resolve it "
+    "using the issuing country/locale of this specific document — a "
+    "US-issued document (USCIS forms, US passports) is month/day/year; "
+    "most other countries' documents are day/month/year. A day value over "
+    "12 is unambiguous either way. Prefer a textual month (e.g. "
+    "\"29 APR 2025\") when present, since it removes the ambiguity "
+    "entirely."
+)
+
+_PASSPORT_SYSTEM += _FORM_FIELD_BOOLEAN_NOTE + _DATE_NORMALIZATION_NOTE
+_G28_SYSTEM += _FORM_FIELD_BOOLEAN_NOTE + _DATE_NORMALIZATION_NOTE
 
 _SYSTEM_PROMPTS = {
     "passport": _PASSPORT_SYSTEM,
@@ -253,7 +282,48 @@ class ExtractionService:
             raise ExtractionError(f"No extraction prompt for doc_type {document.doc_type!r}")
         client = get_llm_client()
         data = client.complete_json(system=system, user=raw_text)
+        if document.doc_type == "passport":
+            data = self._merge_mrz(data, raw_text)
         return data, raw_text
+
+    # MRZ field -> canonical extraction-prompt key it should overwrite, and
+    # the mrz_*_valid flag gating that overwrite (None if TD3 has no
+    # per-field check digit for it — those are gated by the composite check
+    # alone, i.e. by `extract_mrz_fields` having returned anything at all).
+    _MRZ_TO_CANONICAL = {
+        "mrz_surname": ("surname", None),
+        "mrz_given_names": ("given_names", None),
+        "mrz_passport_number": ("passport_number", "mrz_passport_number_valid"),
+        "mrz_nationality": ("nationality", None),
+        "mrz_date_of_birth": ("date_of_birth", "mrz_date_of_birth_valid"),
+        "mrz_sex": ("sex", None),
+        "mrz_date_of_expiry": ("date_of_expiry", "mrz_date_of_expiry_valid"),
+    }
+
+    def _merge_mrz(self, data: dict, raw_text: str) -> dict:
+        """Passport-only: overlay checksum-validated MRZ fields onto `data`.
+
+        MRZ is language-independent Latin/ASCII ground truth, so for the
+        canonical fields it covers it's more trustworthy than the LLM's free
+        text read of a non-English bio page. Runs *after* the LLM call and
+        overwrites wholesale — MRZ values are deliberately never passed
+        through the passport prompt's translation/transliteration
+        instruction, since they're already Latin/ASCII by ICAO spec. Fails
+        open: if no valid MRZ is found (composite check fails, or none
+        present — most test PDFs, cropped/bad-quality images, etc.), `data`
+        is returned unmodified.
+        """
+        mrz = extract_mrz_fields(raw_text)
+        if not mrz:
+            return data
+        merged = {**data, **mrz}
+        for mrz_key, (canonical_key, valid_flag_key) in self._MRZ_TO_CANONICAL.items():
+            if mrz.get(mrz_key) is None:
+                continue
+            if valid_flag_key is not None and not mrz.get(valid_flag_key, False):
+                continue
+            merged[canonical_key] = mrz[mrz_key]
+        return merged
 
     def _file_to_text(self, file) -> str:
         """Text layer (+ filled AcroForm fields) for a PDF; OCR otherwise."""

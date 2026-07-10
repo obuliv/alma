@@ -108,6 +108,10 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.upload-hint {
+  margin: -0.5rem 0 1rem;
+}
+
 .file-list {
   list-style: none;
   padding: 0;
@@ -154,6 +158,12 @@ button:disabled {
   font-size: 0.95rem;
   letter-spacing: -0.01em;
   color: #302f8f;
+}
+
+.case-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
 }
 
 .toggle-icon {

@@ -41,8 +41,10 @@ No env vars are required for a first run — `DATABASE_URL`/`UPLOAD_DIR` default
 to `backend/data/alma.db`/`backend/data/uploads`. Copy `backend/.env.example`
 to `backend/.env` to set `ANTHROPIC_API_KEY` or override anything else.
 
-There is no test suite yet. To smoke-test the API, use Swagger at
-`http://localhost:8000/docs` or `curl` against `/api/*`.
+There is no test suite for the API/UI as a whole yet — smoke-test via Swagger
+at `http://localhost:8000/docs` or `curl` against `/api/*`. `backend/tests/`
+has pytest unit tests for pure-logic modules (currently just
+`app/services/mrz.py`); run with `cd backend && pytest`.
 
 ### Running form-fill (opens a visible browser)
 
@@ -192,6 +194,24 @@ field is a checkbox" without any fixed schema. OCR-derived text has no
 equivalent — a scanned form's checkbox marks stay as whatever plain text
 the OCR/vision engine transcribes; only the AcroForm path gets this
 treatment for now.
+
+Non-English passports: `_PASSPORT_SYSTEM` instructs the LLM to render
+values in English — proper nouns (names, places) transliterated to Latin
+script, everything else translated — but that alone depends on the LLM
+reading a possibly-garbled foreign-script scan correctly. `app/services/
+mrz.py::extract_mrz_fields` independently parses and checksum-validates
+a passport's ICAO 9303 MRZ (the two Latin/ASCII lines at the bottom of
+the bio page), and `_merge_mrz` overlays those fields onto `data` for
+`doc_type == "passport"` only, overwriting `surname`/`given_names`/
+`passport_number`/`nationality`/`date_of_birth`/`sex`/`date_of_expiry`
+whenever the corresponding MRZ check digit (or, where TD3 has none, the
+overall composite digit) validates — MRZ is checksum-verified and
+language-independent, so it wins over the LLM's free-text read for
+exactly these fields. Fails open: no MRZ found or a bad composite check
+just leaves `data` as the LLM produced it, so this never blocks
+extraction. `LLMVisionEngine`'s OCR prompt has an added clause asking it
+to preserve MRZ lines verbatim; `rapidocr` has no equivalent lever, so a
+garbled MRZ there simply won't validate and gets skipped.
 
 Gotcha: `rapidocr-onnxruntime` hard-depends on `opencv-python` (not
 `-headless`), which needs `libGL`/`libglib` — pinning the headless variant

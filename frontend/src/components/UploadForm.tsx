@@ -88,9 +88,14 @@ export default function UploadForm({ onUploaded }: Props) {
         required
       />
 
+      <p className="muted upload-hint">
+        Accepted formats: PDF, JPEG, PNG. Select multiple files if a document
+        spans several pages.
+      </p>
+
       <FileField
         id="passport-files"
-        label="Passport files (PDF, JPEG, or PNG — select multiple pages if needed)"
+        label="Passport"
         files={passportFiles}
         onChange={setPassportFiles}
         inputRef={passportInputRef}
@@ -98,7 +103,7 @@ export default function UploadForm({ onUploaded }: Props) {
 
       <FileField
         id="g28-files"
-        label="G-28 files (PDF, JPEG, or PNG — select multiple pages if needed)"
+        label="G-28"
         files={g28Files}
         onChange={setG28Files}
         inputRef={g28InputRef}

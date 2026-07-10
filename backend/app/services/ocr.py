@@ -54,7 +54,14 @@ class LLMVisionEngine(OCREngine):
     _SYSTEM = (
         "Transcribe every piece of text visible in the attached document "
         "image(s) verbatim, in reading order. Output plain text only — no "
-        "commentary, no markdown, no summarization."
+        "commentary, no markdown, no summarization. If the document has a "
+        "machine-readable zone (MRZ) — the block of two or three "
+        "monospaced lines of uppercase letters, digits, and '<' filler "
+        "characters near the bottom of a passport's biographic page — "
+        "transcribe those lines character-for-character exactly as "
+        "printed, including every '<' filler character and preserving "
+        "each line's exact length; do not omit, collapse, or reflow the "
+        "'<' characters or reformat the line."
     )
 
     def image_to_text(self, images: list[bytes]) -> str:
