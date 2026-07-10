@@ -12,6 +12,9 @@ Pipeline, per document, uniform regardless of `settings.ocr_mode`:
 1. Reduce every file to text: a PDF's embedded text layer if it has one
    (`app.services.text_extraction`), otherwise the configured OCR engine
    (`app.services.ocr.get_ocr_engine()`) on the rasterized/raw page images.
+   For PDFs, filled AcroForm field values are always merged in too — a
+   fillable PDF's answers live in form-field widgets, not the page's text
+   stream, so the text layer alone sees only the blank template.
 2. Concatenate into `raw_text`, then one `complete_json` call turns it into
    the flat key/value `data` dict.
 """
@@ -48,6 +51,21 @@ _G28_SYSTEM = (
     "present in the text even if not listed here. Omit fields you cannot "
     "find; do not guess or hallucinate values."
 )
+
+# Appended to every doc-type prompt: `form_field_text` (text_extraction.py)
+# renders each PDF checkbox/radio widget as a `name: true`/`name: false`
+# line, checked or not, so this is a fixed, learnable convention rather than
+# a per-document guess.
+_FORM_FIELD_BOOLEAN_NOTE = (
+    " The text may include a \"Form field values\" section. Lines there "
+    "formatted as `field_name: true` or `field_name: false` are checkboxes "
+    "or radio options — render these as JSON boolean values (true/false), "
+    "not strings, keyed by a snake_case name derived from the field's "
+    "context (nearby label text), not the raw field_name."
+)
+
+_PASSPORT_SYSTEM += _FORM_FIELD_BOOLEAN_NOTE
+_G28_SYSTEM += _FORM_FIELD_BOOLEAN_NOTE
 
 _SYSTEM_PROMPTS = {
     "passport": _PASSPORT_SYSTEM,
@@ -98,15 +116,18 @@ class ExtractionService:
         return data, raw_text
 
     def _file_to_text(self, file) -> str:
-        """Text layer for a text-PDF; OCR engine output otherwise."""
+        """Text layer (+ filled AcroForm fields) for a PDF; OCR otherwise."""
         content = storage.read_file(file.file_path)
         if file.content_type == "application/pdf":
             text = text_extraction.pdf_text_layer(content)
-            if text_extraction.has_text_layer(text):
-                return text
-            images = text_extraction.rasterize_pdf(content)
-        else:
-            images = [content]
+            if not text_extraction.has_text_layer(text):
+                images = text_extraction.rasterize_pdf(content)
+                text = get_ocr_engine().image_to_text(images)
+            form_fields = text_extraction.form_field_text(content)
+            if form_fields:
+                text = f"{text}\n\nForm field values:\n{form_fields}"
+            return text
+        images = [content]
         return get_ocr_engine().image_to_text(images)
 
     def _store(

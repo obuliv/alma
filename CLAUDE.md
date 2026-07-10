@@ -143,6 +143,28 @@ fallback — an unrecognized `doc_type` raises immediately rather than silently
 extracting with the wrong template; this is safe today because the API layer
 (`_parse_doc_type`) already only accepts values in the `DocType` enum.
 
+For PDFs, `text_extraction.form_field_text` (via `pypdf`) always merges in
+filled AcroForm field values on top of whatever the text-layer/OCR step
+produced. This matters because a fillable PDF's answers live in form-field
+widgets, not the page's text content stream — a G-28 filled out in a PDF
+editor has plenty of text-layer content (the blank template's printed
+labels) but zero actual data in it, so without this step extraction silently
+returns `{}` even though `has_text_layer` passes. Field values are read by
+walking each page's `/Annots` rather than `PdfReader.get_fields()`/the
+`/AcroForm` field tree — some real-world PDFs have a malformed field tree
+that makes the latter miss most fields.
+
+Checkbox/radio widgets (`/FT == "/Btn"`) are called out as `name: true`/
+`name: false` lines — always, checked or not, unlike text fields which are
+omitted when empty — and the system prompts (`_FORM_FIELD_BOOLEAN_NOTE`)
+tell the LLM to render these as JSON booleans. This is deliberate: it's the
+only place in `extraction_results.data` where a value's Python type
+(`bool`) carries meaning, so stream 3's mapper can detect "this extracted
+field is a checkbox" without any fixed schema. OCR-derived text has no
+equivalent — a scanned form's checkbox marks stay as whatever plain text
+the OCR/vision engine transcribes; only the AcroForm path gets this
+treatment for now.
+
 Gotcha: `rapidocr-onnxruntime` hard-depends on `opencv-python` (not
 `-headless`), which needs `libGL`/`libglib` — pinning the headless variant
 alongside it doesn't help, since pip won't dedupe two differently-named
