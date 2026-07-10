@@ -34,14 +34,19 @@ _POLL_S = 1.0
 _MAP_SYSTEM_PROMPT = (
     "You map extracted applicant data onto a target web form's fields. Given "
     "the applicant's data (grouped by document type) and the form's fields "
-    "(selector, label, input_type, options), return a single JSON object "
-    "mapping each field's selector to the value that should be typed/selected "
-    "into it. Only include selectors you are confident about; omit fields you "
-    "cannot map. For 'select' fields, the value must be one of the given "
-    "options. For checkboxes/radios, use \"true\" or \"false\". For 'date' "
-    "fields, the value must be reformatted to ISO 8601 \"YYYY-MM-DD\" "
-    "regardless of what format the source data uses — native date inputs "
-    "silently reject any other format."
+    "(selector, label, input_type, options), return a single JSON object with "
+    "two keys: \"mapping\", an object of {selector: value} giving the value "
+    "that should be typed/selected into each field, and \"field_sources\", an "
+    "object of {selector: source_key} naming the dotted path of the "
+    "applicant-data key each value was taken from (e.g. "
+    "\"passport.date_of_birth\", or a short description if it was combined "
+    "from more than one key). \"mapping\" and \"field_sources\" must have "
+    "exactly the same set of selector keys. Only include selectors you are "
+    "confident about; omit fields you cannot map. For 'select' fields, the "
+    "value must be one of the given options. For checkboxes/radios, use "
+    "\"true\" or \"false\". For 'date' fields, the value must be reformatted "
+    "to ISO 8601 \"YYYY-MM-DD\" regardless of what format the source data "
+    "uses — native date inputs silently reject any other format."
 )
 
 
@@ -157,7 +162,8 @@ class FormFillService:
         user = (
             f"Applicant data:\n{json.dumps(data)}\n\n"
             f"Form fields:\n{json.dumps(fields)}\n\n"
-            "Respond with {selector: value}."
+            'Respond with {"mapping": {selector: value}, '
+            '"field_sources": {selector: source_key}}.'
         )
         logger.debug("form-fill: applicant data sent to mapper:\n%s", json.dumps(data, indent=2))
         logger.debug(
@@ -166,18 +172,27 @@ class FormFillService:
             json.dumps(fields, indent=2),
         )
         try:
-            mapping = get_llm_client().complete_json(_MAP_SYSTEM_PROMPT, user)
+            result = get_llm_client().complete_json(_MAP_SYSTEM_PROMPT, user)
         except Exception as exc:
             raise FormFillError(f"Field-mapping LLM call failed: {exc}") from exc
 
-        # Log which selectors got mapped, not the values — mapped values are
-        # PII (names, passport numbers, DOB, ...); full values are still
-        # available at DEBUG for anyone who explicitly opts into that.
+        mapping = result.get("mapping", {})
+        field_sources = result.get("field_sources", {})
+
+        # Log which form field maps to which source data field, not the
+        # values themselves — mapped values are PII (names, passport
+        # numbers, DOB, ...); full values are still available at DEBUG for
+        # anyone who explicitly opts into that.
+        by_selector = {f["selector"]: f for f in fields}
+        correspondence = "\n".join(
+            f"  {selector} (\"{by_selector.get(selector, {}).get('label', '')}\") <- {field_sources.get(selector, '?')}"
+            for selector in mapping
+        )
         logger.info(
-            "form-fill: LLM generated mapping for %d/%d field(s), mapped selectors: %s",
+            "form-fill: LLM generated mapping for %d/%d field(s); form field <- data field:\n%s",
             len(mapping),
             len(fields),
-            sorted(mapping.keys()),
+            correspondence,
         )
         logger.debug("form-fill: mapping with values:\n%s", json.dumps(mapping, indent=2))
         unmapped = [f["selector"] for f in fields if f["selector"] not in mapping]

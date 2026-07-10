@@ -67,13 +67,22 @@ _G28_SYSTEM = (
 # Appended to every doc-type prompt: `form_field_text` (text_extraction.py)
 # renders each PDF checkbox/radio widget as a `name: true`/`name: false`
 # line, checked or not, so this is a fixed, learnable convention rather than
-# a per-document guess.
+# a per-document guess. The "trust the label, not field_name" guidance
+# below applies to *every* field in this section, not just booleans — some
+# real-world PDFs have AcroForm field names that don't match what's actually
+# printed at that field's position on the page (e.g. a field literally named
+# `Line6_EMail[0]` can sit at the "Mobile Telephone Number" box), so the raw
+# field_name alone isn't trustworthy as the source of a key's meaning.
 _FORM_FIELD_BOOLEAN_NOTE = (
     " The text may include a \"Form field values\" section. Lines there "
     "formatted as `field_name: true` or `field_name: false` are checkboxes "
     "or radio options — render these as JSON boolean values (true/false), "
-    "not strings, keyed by a snake_case name derived from the field's "
-    "context (nearby label text), not the raw field_name."
+    "not strings. For every field in this section (boolean or not), derive "
+    "the JSON key's meaning — and sanity-check the value itself — from "
+    "nearby label text in the main transcribed text (the field's on-page "
+    "context), not from the raw field_name; if the printed label and the "
+    "raw field_name disagree about what the field is, trust the printed "
+    "label."
 )
 
 # Normalizing dates here, rather than downstream at form-fill time, is
@@ -115,6 +124,30 @@ _DOC_TYPE_CHECK_SYSTEM = (
     'sentence>"}.'
 )
 
+# Unlike the checks above, this one needs to see values — it's judging
+# whether a value's apparent shape matches what its own field name implies
+# (e.g. an email address under a "*_telephone_number" key), which can't be
+# judged from names alone. It's the second line of defense against exactly
+# the failure mode described in `_FORM_FIELD_BOOLEAN_NOTE`: a source PDF
+# whose AcroForm field names don't match their printed position, so
+# extraction ends up with values that are self-evidently the wrong kind of
+# value for their key even after that prompt guidance.
+_FIELD_VALUE_SANITY_SYSTEM = (
+    "You review a set of extracted field name/value pairs from a document "
+    "for internal consistency. For each field, judge whether its value's "
+    "apparent type or format is consistent with what the field name "
+    "implies — e.g. a field name suggesting an email address should hold "
+    "something shaped like an email; a field name suggesting a "
+    "phone/mobile/fax number should hold digits, not an email address; a "
+    "field name suggesting a date should hold a date. Only report a "
+    "mismatch you are confident about — a genuinely wrong-shaped value, not "
+    "merely an unusual but plausible one — and never report a value of "
+    "\"N/A\", empty, or similar placeholder, which is always fine. Respond "
+    'with a single JSON object: {"issues": [{"field": "<field name>", '
+    '"reason": "<one short sentence>"}]}. If nothing looks wrong, respond '
+    '{"issues": []}.'
+)
+
 _IDENTITY_PAIR_SYSTEM = (
     "Two documents from the same case were extracted. You are given each "
     "document's type and its field names (not values). Identify field name "
@@ -141,8 +174,9 @@ class ExtractionService:
 
         Marks the document `extracting`, then `extracted`/`failed`/`flagged`.
         `flagged` means extraction itself succeeded but a validation check
-        (doc-type match, or a cross-document identity conflict) raised a
-        concern — distinct from `failed`, which means the pipeline broke.
+        (doc-type match, a field's value not matching what its name implies,
+        or a cross-document identity conflict) raised a concern — distinct
+        from `failed`, which means the pipeline broke.
         """
         document = db.get(Document, document_id)
         if document is None:
@@ -172,11 +206,40 @@ class ExtractionService:
             db.commit()
             return
 
-        self._store(db, document, data=data, raw_text=raw_text, error=None)
-        document.status = DocumentStatus.extracted.value
+        issues = self._validate_field_formats(data)
+        error = self._format_issues(issues) if issues else None
+        self._store(db, document, data=data, raw_text=raw_text, error=error)
+        document.status = DocumentStatus.flagged.value if issues else DocumentStatus.extracted.value
         db.commit()
 
         self._check_conflicts(db, document)
+
+    def _validate_field_formats(self, data: dict) -> list[dict]:
+        """Does each value's apparent shape match what its field name
+        implies? Catches a field whose value is self-evidently the wrong
+        kind of thing for its key (e.g. an email address under a
+        `*_telephone_number` key) — the signature of a source PDF whose
+        AcroForm field names don't match their printed position (see
+        `_FORM_FIELD_BOOLEAN_NOTE`). Unlike `_validate_doc_type`, this needs
+        the actual values, not just field names.
+        """
+        if not data:
+            return []
+        client = get_llm_client()
+        try:
+            result = client.complete_json(
+                system=_FIELD_VALUE_SANITY_SYSTEM,
+                user=json.dumps(data),
+            )
+        except LLMError:
+            # Fail open: an LLM hiccup on the validation step shouldn't sink
+            # an otherwise-successful extraction.
+            return []
+        return [i for i in result.get("issues", []) if i.get("field") in data]
+
+    def _format_issues(self, issues: list[dict]) -> str:
+        parts = [f"{i.get('field', '?')}: {i.get('reason', '')}" for i in issues]
+        return "Field value looks inconsistent with its name: " + "; ".join(parts)
 
     def _validate_doc_type(self, doc_type: str, data: dict) -> tuple[bool, str]:
         """Does the extracted field-name set look consistent with `doc_type`?
@@ -222,14 +285,23 @@ class ExtractionService:
             if not reason:
                 continue
             document.status = DocumentStatus.flagged.value
-            document.extraction.error = (
-                f"Possible identity conflict with {sibling.doc_type} document: {reason}"
+            document.extraction.error = self._append_error(
+                document.extraction.error,
+                f"Possible identity conflict with {sibling.doc_type} document: {reason}",
             )
             sibling.status = DocumentStatus.flagged.value
-            sibling.extraction.error = (
-                f"Possible identity conflict with {document.doc_type} document: {reason}"
+            sibling.extraction.error = self._append_error(
+                sibling.extraction.error,
+                f"Possible identity conflict with {document.doc_type} document: {reason}",
             )
             db.commit()
+
+    def _append_error(self, existing: str | None, new: str) -> str:
+        """A document can be flagged for more than one reason (e.g. a field
+        format issue found at extraction time, then an identity conflict
+        found afterward) — append rather than overwrite so an earlier flag
+        reason isn't silently lost."""
+        return f"{existing}; {new}" if existing else new
 
     def _compare_identity(self, doc_a: Document, doc_b: Document) -> str | None:
         """Ask the LLM which field *names* across the two documents should
