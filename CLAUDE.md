@@ -6,14 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A document-upload platform for passport and G-28 documents (PDF/JPEG/PNG). This
 repo implements the **foundation** (upload interface, database layer, Dockerized
-deployment) plus **data extraction** (step 2, `backend/app/services/extraction.py`).
-One later phase remains a stub so it slots in without schema/API rework:
-
-- **Form population** via browser automation (step 3) — `backend/app/services/form_fill.py`
-
-When implementing that, fill in the existing stub methods; do not restructure
-the models or upload flow around them. Shared plumbing both streams depend on is
-already built — reuse it (see "Shared utils & the seam" below).
+deployment), **data extraction** (step 2, `backend/app/services/extraction.py`),
+and **form population** via browser automation (step 3) —
+`backend/app/services/form_fill.py`, `backend/app/api/routes/form_fill.py`, and
+the **Form Fill** tab in the UI. See "Running form-fill" below — it opens a
+visible browser, so it needs the API running on the host, not in Docker.
+Shared plumbing both streams depend on is already built — reuse it (see
+"Shared utils & the seam" below).
 
 ## Commands
 
@@ -45,6 +44,30 @@ npm run build                      # tsc typecheck + vite build
 
 There is no test suite yet. To smoke-test the API, use Swagger at
 `http://localhost:8000/docs` or `curl` against `/api/*`.
+
+### Running form-fill (opens a visible browser)
+
+Form-fill drives a **headed** Chromium window so you can watch it fill and
+correct/submit yourself — a container has no display, so this only works with
+the API on the host:
+
+```bash
+docker compose up -d db            # Postgres only, exposed on localhost:5432
+
+cd backend
+pip install -r requirements.txt playwright==1.49.0
+playwright install chromium
+export DATABASE_URL=postgresql+psycopg://alma:alma@localhost:5432/alma
+export UPLOAD_DIR=./data/uploads
+export ANTHROPIC_API_KEY=...
+alembic upgrade head
+uvicorn app.main:app --reload
+
+cd frontend && npm run dev         # proxies /api -> localhost:8000
+```
+
+Upload a passport + G-28 under the same Case ID, wait for both to reach
+`extracted`, then use the **Form Fill** tab to pick the case and a form URL.
 
 ## Architecture
 
@@ -82,6 +105,11 @@ files and produces one merged result.
   whatever keys the LLM extracts (form-agnostic, no fixed field list).
 - `applications.case_id` — human-entered Case ID (optional at upload). Groups a
   passport + G-28 into one application so form-fill can select data by case.
+- `form_fill_runs` — one row per form-fill attempt: `form_url`, `status`
+  (`filling → filled | failed`), scraped `fields` (JSONB list), the `mapping`
+  actually applied (JSONB `{selector: value}`), and `error`. One-shot: fields
+  are detected, mapped by the LLM, and filled in a single background pass —
+  review/correction happens in the live browser window, not the UI.
 
 Enums are stored as plain strings validated in Python (see the `enum.Enum`
 classes in the model files), not Postgres enum types — keeps migrations simple.
@@ -95,7 +123,8 @@ Built and meant for reuse — do not re-invent these in the workstreams:
   attachments=[(bytes, media_type)])` serves **both** vision extraction (stream 2)
   and text field-mapping (stream 3). Failures raise `LLMError`.
 - `app/database.py::session_scope()` — transactional session for out-of-request
-  work (background tasks, the automation worker). Commits/rolls back/closes.
+  work (background tasks). Commits/rolls back/closes. Used by both
+  `_run_extraction` and `_run_form_fill`.
 - `app/core/logging.py` (`configure_logging`/`get_logger`) and
   `app/core/errors.py` (`AppError` + `ExtractionError`/`FormFillError`/`LLMError`,
   mapped to JSON by a handler in `main.py`).
@@ -171,19 +200,30 @@ alongside it doesn't help, since pip won't dedupe two differently-named
 packages that both provide `cv2`. The Dockerfile installs `libgl1
 libglib2.0-0` instead of fighting this.
 
-### Browser-automation worker (stream 3)
+### Browser-automation form-fill (stream 3)
 
-`form_fill.py` runs in a **separate `automation` container**
-(`automation/Dockerfile`, Playwright base image) under the compose `worker`
-profile — it is not started by `docker compose up`. This keeps heavy browser
-deps out of the `api` image, so `form_fill.py` imports Playwright **lazily**
-inside `fill()`; never add a top-level `playwright` import (it would break the
-api image). Build it with `docker compose --profile worker build automation`.
+`POST /api/form-fill-runs` (`{case_id, form_url}`) creates a `form_fill_runs`
+row and fires `form_fill_service.fill()` **once** as a FastAPI `BackgroundTask`
+(`_run_form_fill` in `routes/form_fill.py`, same `session_scope()` pattern as
+`_run_extraction`). `fill()` scrapes the form's fields, asks the LLM to map
+`application_service.build_application_data()` onto them, fills a **headed**
+(`headless=False`) Chromium via Playwright, and **blocks, holding the browser
+open**, until the user closes the window — that's the review/correction step,
+done live in the browser rather than in the UI. `form_fill.py` imports
+Playwright **lazily** inside `fill()`; never add a top-level `playwright`
+import (it would break the Docker `api` image, which never runs this path).
+
+Because it opens a *visible* window, `fill()` only works when the API runs on
+a host with a display — see "Running form-fill" above. The `automation`
+container/`worker` profile (`automation/Dockerfile`) predates this and is
+**unused** by the current flow; it's a headless-worker scaffold, not wired to
+`form_fill_runs`.
 
 Minimal React SPA. `api/client.ts` is the single fetch wrapper (same-origin
-`/api`). `DocumentList.tsx` **polls** `GET /api/documents` every 2.5s so status
-transitions (uploaded → extracted) appear without a reload — there are no
-websockets. `UploadForm.tsx` uses `<input multiple>` for the multi-file case.
+`/api`). `DocumentList.tsx` / `FormFillList.tsx` **poll** their list endpoints
+every 2.5s so status transitions appear without a reload — there are no
+websockets. `UploadForm.tsx` uses `<input multiple>` for the multi-file case;
+`FormFillForm.tsx` picks a Case ID from `GET /api/applications` and a form URL.
 
 ## Conventions
 

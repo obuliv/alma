@@ -7,7 +7,7 @@ A `case_id` entered at upload groups a passport + G-28 under one `Application`.
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Application, Document
+from app.models import Application, Document, FormFillRun
 
 
 def get_or_create_by_case_id(db: Session, case_id: str) -> Application:
@@ -41,3 +41,16 @@ def build_application_data(application: Application) -> dict:
 
 def get_application_documents(application: Application) -> list[Document]:
     return list(application.documents)
+
+
+def create_run(db: Session, case_id: str, form_url: str) -> FormFillRun:
+    """Create a form-fill run for `case_id`'s application against `form_url`.
+
+    Caller is responsible for committing.
+    """
+    application = get_or_create_by_case_id(db, case_id)
+    application.form_url = form_url
+    run = FormFillRun(application_id=application.id, form_url=form_url)
+    db.add(run)
+    db.flush()  # assign run.id
+    return run
