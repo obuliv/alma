@@ -46,5 +46,6 @@ class DocumentSummary(BaseModel):
     doc_type: str
     status: str
     file_count: int
+    case_id: str | None
     created_at: datetime
     updated_at: datetime

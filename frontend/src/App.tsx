@@ -37,7 +37,7 @@ export default function App() {
       {tab === "documents" && (
         <>
           <UploadForm onUploaded={() => setRefreshKey((k) => k + 1)} />
-          <h2 style={{ fontSize: "1.1rem" }}>Documents</h2>
+          <h2 className="section-title">Documents</h2>
           <DocumentList refreshKey={refreshKey} />
         </>
       )}
@@ -45,7 +45,7 @@ export default function App() {
       {tab === "formfill" && (
         <>
           <FormFillForm onCreated={() => setRunRefreshKey((k) => k + 1)} />
-          <h2 style={{ fontSize: "1.1rem" }}>Form Fill Runs</h2>
+          <h2 className="section-title">Form Fill Runs</h2>
           <FormFillList refreshKey={runRefreshKey} />
         </>
       )}

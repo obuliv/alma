@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.core.validation import validate_and_sniff
 from app.database import session_scope
-from app.models import Document, DocumentFile, DocType, DocumentStatus
+from app.models import Application, Document, DocumentFile, DocType, DocumentStatus
 from app.schemas.document import DocumentOut, DocumentSummary
 from app.services import storage
 from app.services.application_service import get_or_create_by_case_id
@@ -133,8 +133,10 @@ def list_documents(db: Session = Depends(get_db)) -> list[DocumentSummary]:
         select(
             Document,
             func.count(DocumentFile.id).label("file_count"),
+            Application.case_id,
         )
         .outerjoin(DocumentFile, DocumentFile.document_id == Document.id)
+        .outerjoin(Application, Application.id == Document.application_id)
         .group_by(Document.id)
         .order_by(Document.created_at.desc())
     ).all()
@@ -144,10 +146,11 @@ def list_documents(db: Session = Depends(get_db)) -> list[DocumentSummary]:
             doc_type=doc.doc_type,
             status=doc.status,
             file_count=count,
+            case_id=case_id,
             created_at=doc.created_at,
             updated_at=doc.updated_at,
         )
-        for doc, count in rows
+        for doc, count, case_id in rows
     ]
 
 

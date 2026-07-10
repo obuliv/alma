@@ -50,19 +50,15 @@ export default function FormFillList({ refreshKey }: Props) {
     <div className="card">
       {runs.map((run) => (
         <div key={run.id}>
-          <div
-            className="doc-row"
-            onClick={() => toggle(run.id)}
-            style={{ cursor: "pointer" }}
-          >
-            <div>
-              <strong>{run.case_id ?? "(no case)"}</strong>{" "}
-              <span className="muted">· {run.form_url}</span>
+          <div className="doc-row" onClick={() => toggle(run.id)}>
+            <div className="doc-row-main">
+              <strong>{run.case_id ?? "(no case)"}</strong>
+              <span className="muted">{run.form_url}</span>
             </div>
             <span className={`badge ${run.status}`}>{run.status}</span>
           </div>
           {expanded === run.id && (
-            <div className="muted" style={{ paddingBottom: "0.75rem" }}>
+            <div className="muted extraction-detail">
               {!detail && "Loading…"}
               {detail?.status === "filling" && (
                 <p>Figuring out the mapping and opening the browser…</p>

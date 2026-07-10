@@ -5,6 +5,7 @@ export interface DocumentSummary {
   doc_type: DocType;
   status: string;
   file_count: number;
+  case_id: string | null;
   created_at: string;
   updated_at: string;
 }
