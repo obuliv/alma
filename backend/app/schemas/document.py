@@ -10,6 +10,7 @@ class ExtractionOut(BaseModel):
     data: dict
     raw_text: str | None
     error: str | None
+    corrections: list | None
     created_at: datetime
 
 

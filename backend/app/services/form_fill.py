@@ -34,15 +34,20 @@ _POLL_S = 1.0
 _MAP_SYSTEM_PROMPT = (
     "You map extracted applicant data onto a target web form's fields. Given "
     "the applicant's data (grouped by document type) and the form's fields "
-    "(selector, label, input_type, options), return a single JSON object with "
-    "two keys: \"mapping\", an object of {selector: value} giving the value "
-    "that should be typed/selected into each field, and \"field_sources\", an "
-    "object of {selector: source_key} naming the dotted path of the "
-    "applicant-data key each value was taken from (e.g. "
+    "(selector, label, section, input_type, options), return a single JSON "
+    "object with two keys: \"mapping\", an object of {selector: value} giving "
+    "the value that should be typed/selected into each field, and "
+    "\"field_sources\", an object of {selector: source_key} naming the dotted "
+    "path of the applicant-data key each value was taken from (e.g. "
     "\"passport.date_of_birth\", or a short description if it was combined "
     "from more than one key). \"mapping\" and \"field_sources\" must have "
     "exactly the same set of selector keys. Only include selectors you are "
-    "confident about; omit fields you cannot map. For 'select' fields, the "
+    "confident about; omit fields you cannot map. Forms like G-28 repeat the "
+    "same field labels and numbering (e.g. \"Family Name\", \"2.a\") in "
+    "multiple sections about different people (attorney/representative vs. "
+    "client/applicant) — use each field's \"section\" (its enclosing "
+    "fieldset/legend or nearest heading) to pick the data key for the right "
+    "person; a bare label match is not enough. For 'select' fields, the "
     "value must be one of the given options. For checkboxes/radios, use "
     "\"true\" or \"false\". For 'date' fields, the value must be reformatted "
     "to ISO 8601 \"YYYY-MM-DD\" regardless of what format the source data "
@@ -114,10 +119,45 @@ class FormFillService:
             time.sleep(_POLL_S)
 
     def _scrape_fields(self, page) -> list[dict]:
-        """Enumerate fillable controls: selector, label, input type, options."""
+        """Enumerate fillable controls: selector, label, section, input type,
+        options.
+
+        `section` is a breadcrumb of enclosing `<fieldset><legend>` text and
+        preceding headings (h1-h4), outermost first — it's needed because
+        forms like G-28 repeat the same field labels/numbering (e.g. "Family
+        Name", "2.a") across multiple sections about *different people*
+        (attorney vs. client), sometimes nested (a "Name" fieldset inside a
+        "Part 1: Attorney" section) — a single nearest match would lose the
+        outer, actually-disambiguating context, so every level up to
+        document.body is collected rather than stopping at the first hit.
+        """
         return page.evaluate(
             """
             () => {
+              const findSection = (start) => {
+                const crumbs = [];
+                let node = start;
+                while (node && node !== document.body) {
+                  if (node.tagName === 'FIELDSET') {
+                    const legend = node.querySelector(':scope > legend');
+                    if (legend && legend.textContent.trim()) {
+                      crumbs.push(legend.textContent.trim());
+                    }
+                  }
+                  let sib = node.previousElementSibling;
+                  while (sib) {
+                    if (/^H[1-4]$/.test(sib.tagName) && sib.textContent.trim()) {
+                      crumbs.push(sib.textContent.trim());
+                      sib = null;
+                      break;
+                    }
+                    sib = sib.previousElementSibling;
+                  }
+                  node = node.parentElement;
+                }
+                return crumbs.reverse().join(' > ');
+              };
+
               const controls = Array.from(
                 document.querySelectorAll('input, select, textarea')
               );
@@ -143,6 +183,7 @@ class FormFillService:
                   return {
                     selector,
                     label,
+                    section: findSection(el.parentElement || el),
                     input_type: tag === 'select' ? 'select'
                       : tag === 'textarea' ? 'textarea'
                       : (el.type || 'text').toLowerCase(),

@@ -142,10 +142,20 @@ _FIELD_VALUE_SANITY_SYSTEM = (
     "field name suggesting a date should hold a date. Only report a "
     "mismatch you are confident about — a genuinely wrong-shaped value, not "
     "merely an unusual but plausible one — and never report a value of "
-    "\"N/A\", empty, or similar placeholder, which is always fine. Respond "
-    'with a single JSON object: {"issues": [{"field": "<field name>", '
-    '"reason": "<one short sentence>"}]}. If nothing looks wrong, respond '
-    '{"issues": []}.'
+    "\"N/A\", empty, or similar placeholder, which is always fine. When you "
+    "report an issue, also include a \"fix\": an object of {field_name: "
+    "corrected_value} giving every field update needed to resolve it. Most "
+    "often the value was recorded under the wrong field (e.g. an email "
+    "address under a phone-number key) — in that case the fix should move "
+    "it to the field it actually belongs to (set that field's value) and "
+    "correct the field it was wrongly found under (set it to \"N/A\" if you "
+    "cannot recover the right value for it), not just delete the misplaced "
+    "value. Only include \"fix\" when you are confident it restores the "
+    "correct real-world data; omit it (leave the issue unfixed) if you "
+    "are not sure. Respond with a single JSON object: {\"issues\": "
+    '[{"field": "<field name>", "reason": "<one short sentence>", "fix": '
+    '{"<field_name>": "<corrected value>"}}]}. If nothing looks wrong, '
+    'respond {"issues": []}.'
 )
 
 _IDENTITY_PAIR_SYSTEM = (
@@ -207,8 +217,9 @@ class ExtractionService:
             return
 
         issues = self._validate_field_formats(data)
-        error = self._format_issues(issues) if issues else None
-        self._store(db, document, data=data, raw_text=raw_text, error=error)
+        corrections = self._apply_fixes(data, issues) if issues else []
+        error = self._format_issues(issues, corrections) if issues else None
+        self._store(db, document, data=data, raw_text=raw_text, error=error, corrections=corrections or None)
         document.status = DocumentStatus.flagged.value if issues else DocumentStatus.extracted.value
         db.commit()
 
@@ -237,9 +248,40 @@ class ExtractionService:
             return []
         return [i for i in result.get("issues", []) if i.get("field") in data]
 
-    def _format_issues(self, issues: list[dict]) -> str:
-        parts = [f"{i.get('field', '?')}: {i.get('reason', '')}" for i in issues]
-        return "Field value looks inconsistent with its name: " + "; ".join(parts)
+    def _apply_fixes(self, data: dict, issues: list[dict]) -> list[dict]:
+        """Apply each issue's confident `fix` to `data` in place, returning a
+        before/after record per field actually changed.
+
+        A document stays `flagged` even after fixes are applied — this
+        auto-corrects the data (so it's not silently wrong for step 3's
+        mapper) while still surfacing that a correction happened, for a
+        human to double check.
+        """
+        corrections: list[dict] = []
+        for issue in issues:
+            fix = issue.get("fix")
+            if not isinstance(fix, dict) or not fix:
+                continue
+            reason = issue.get("reason", "")
+            for field, after in fix.items():
+                before = data.get(field)
+                if before == after:
+                    continue
+                data[field] = after
+                corrections.append(
+                    {"field": field, "before": before, "after": after, "reason": reason}
+                )
+        return corrections
+
+    def _format_issues(self, issues: list[dict], corrections: list[dict]) -> str:
+        fixed_fields = {c["field"] for c in corrections}
+        parts = []
+        for i in issues:
+            field = i.get("field", "?")
+            reason = i.get("reason", "")
+            tag = "auto-corrected" if field in fixed_fields else "not auto-corrected"
+            parts.append(f"{field}: {reason} ({tag})")
+        return "Field value looked inconsistent with its name: " + "; ".join(parts)
 
     def _validate_doc_type(self, doc_type: str, data: dict) -> tuple[bool, str]:
         """Does the extracted field-name set look consistent with `doc_type`?
@@ -420,6 +462,7 @@ class ExtractionService:
         data: dict,
         raw_text: str | None,
         error: str | None,
+        corrections: list | None = None,
     ) -> None:
         result = document.extraction
         if result is None:
@@ -428,6 +471,7 @@ class ExtractionService:
         result.data = data
         result.raw_text = raw_text
         result.error = error
+        result.corrections = corrections
 
 
 extraction_service = ExtractionService()
