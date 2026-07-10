@@ -69,24 +69,27 @@ async def create_document(
     background: BackgroundTasks,
     doc_type: str = Form(...),
     files: list[UploadFile] = File(...),
-    case_id: str | None = Form(None),
+    case_id: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Document:
     """Upload one or many files as a single logical document.
 
-    An optional `case_id` groups the document with others under one application
+    `case_id` groups the document with others under one application
     (get-or-create), so a passport + G-28 share the same case.
     """
     if not files:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="At least one file is required."
         )
+    if not case_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="case_id is required."
+        )
     doc_type_value = _parse_doc_type(doc_type)
 
     document = Document(doc_type=doc_type_value, status=DocumentStatus.uploaded.value)
-    if case_id and case_id.strip():
-        application = get_or_create_by_case_id(db, case_id.strip())
-        document.application_id = application.id
+    application = get_or_create_by_case_id(db, case_id.strip())
+    document.application_id = application.id
     db.add(document)
     db.flush()  # assign document.id before saving files
 

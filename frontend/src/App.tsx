@@ -9,7 +9,8 @@ export default function App() {
     <div className="container">
       <h1>Alma — Document Upload</h1>
       <p className="subtitle">
-        Upload passport and G-28 documents (PDF, JPEG, or PNG).
+        Upload a case's passport and G-28 together (PDF, JPEG, or PNG), grouped
+        by Case ID.
       </p>
 
       <UploadForm onUploaded={() => setRefreshKey((k) => k + 1)} />
