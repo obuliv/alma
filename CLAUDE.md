@@ -5,64 +5,85 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A document-upload platform for passport and G-28 documents (PDF/JPEG/PNG). This
-repo implements the **foundation** (upload interface, database layer, Dockerized
-deployment) plus **data extraction** (step 2, `backend/app/services/extraction.py`).
-One later phase remains a stub so it slots in without schema/API rework:
-
-- **Form population** via browser automation (step 3) — `backend/app/services/form_fill.py`
-
-When implementing that, fill in the existing stub methods; do not restructure
-the models or upload flow around them. Shared plumbing both streams depend on is
+repo implements the **foundation** (upload interface, database layer, native
+local dev via `./run.sh`), **data extraction** (step 2,
+`backend/app/services/extraction.py`), and **form population** via browser
+automation (step 3) — `backend/app/services/form_fill.py`,
+`backend/app/api/routes/form_fill.py`, and the **Form Fill** tab in the UI. See
+"Running form-fill" below — it opens a visible browser, so it needs a process
+with a display (your machine). Shared plumbing both streams depend on is
 already built — reuse it (see "Shared utils & the seam" below).
 
 ## Commands
 
 ```bash
-# Run the whole stack (db + api + web)
-cp .env.example .env
-docker compose up --build          # UI :8080, API :8000, Swagger :8000/docs
+# Run everything (venv + migrations + api + frontend dev server)
+./run.sh                           # API :8000, Swagger :8000/docs, Vite prints its own port
 
-docker compose down                # stop (keeps pgdata + uploads volumes)
-docker compose down -v             # stop AND wipe DB + uploaded files
-
-# Backend outside Docker (needs a reachable Postgres)
+# Equivalent by hand:
 cd backend
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-export DATABASE_URL=postgresql+psycopg://alma:alma@localhost:5432/alma
-export UPLOAD_DIR=./data/uploads
-alembic upgrade head               # apply migrations
+alembic upgrade head               # apply migrations, creates data/alma.db
 uvicorn app.main:app --reload
 
 # New migration after changing app/models/*
 alembic revision --autogenerate -m "describe change"
 
-# Frontend outside Docker (proxies /api -> localhost:8000 via vite.config.ts)
+# Frontend (proxies /api -> localhost:8000 via vite.config.ts)
 cd frontend
 npm install
 npm run dev
 npm run build                      # tsc typecheck + vite build
 ```
 
+No env vars are required for a first run — `DATABASE_URL`/`UPLOAD_DIR` default
+to `backend/data/alma.db`/`backend/data/uploads`. Copy `backend/.env.example`
+to `backend/.env` to set `ANTHROPIC_API_KEY` or override anything else.
+
 There is no test suite yet. To smoke-test the API, use Swagger at
 `http://localhost:8000/docs` or `curl` against `/api/*`.
 
+### Running form-fill (opens a visible browser)
+
+Form-fill drives a **headed** Chromium window so you can watch it fill and
+correct/submit yourself — this needs a process with a display, i.e. run it via
+`./run.sh` or `uvicorn` directly on your machine, same as any other run.
+`./run.sh` already installs Playwright + its Chromium binary (see below); by
+hand it's:
+
+```bash
+cd backend
+pip install -r requirements.txt
+pip install playwright==1.49.0
+playwright install chromium
+# set ANTHROPIC_API_KEY in backend/.env (see backend/.env.example)
+alembic upgrade head
+uvicorn app.main:app --reload
+
+cd frontend && npm run dev         # proxies /api -> localhost:8000
+```
+
+Upload a passport + G-28 under the same Case ID, wait for both to reach
+`extracted`, then use the **Form Fill** tab to pick the case and a form URL.
+
 ## Architecture
 
-Three containers, **single origin**: nginx in the `web` container serves the
-React build and reverse-proxies `/api/` to `api:8000` (see
-`frontend/nginx.conf`). This is why there is no CORS config in the normal path —
-`app/config.py` only wires CORS when `CORS_ORIGINS` is set, which is for running
-the frontend dev server separately.
+Two native processes, **same-origin in the browser**: the Vite dev server
+proxies `/api/*` to the FastAPI backend (see `frontend/vite.config.ts`). This is
+why there is no CORS config in the normal path — `app/config.py` only wires
+CORS when `CORS_ORIGINS` is set, which would only matter if something talked to
+the API directly cross-origin instead of through the Vite proxy.
 
 ```
-Browser -> web (nginx: SPA + /api proxy) -> api (FastAPI) -> db (Postgres)
-                                              |
-                                              +-> uploads volume (files on disk)
+Browser -> Vite dev server (SPA + /api proxy) -> FastAPI -> SQLite file
+                                                    |
+                                                    +-> data/uploads (files on disk)
 ```
 
-Files are written to disk on the `uploads` volume (`app/services/storage.py`,
-under `UPLOAD_DIR/<document_id>/`); the DB stores only metadata + paths, never
-blobs.
+Files are written to disk under `backend/data/uploads`
+(`app/services/storage.py`, under `UPLOAD_DIR/<document_id>/`); the DB stores
+only metadata + paths, never blobs.
 
 ### Data model (`backend/app/models/`)
 
@@ -78,13 +99,19 @@ files and produces one merged result.
 - `documents` — logical doc; `doc_type` ∈ {`passport`, `g28`}, `status` drives
   the lifecycle `uploaded → extracting → extracted | failed`.
 - `document_files` — the actual uploaded pages, ordered by `page_order`.
-- `extraction_results` — one row per document, `data` is **JSONB** holding
+- `extraction_results` — one row per document, `data` is **JSON** holding
   whatever keys the LLM extracts (form-agnostic, no fixed field list).
 - `applications.case_id` — human-entered Case ID (optional at upload). Groups a
   passport + G-28 into one application so form-fill can select data by case.
+- `form_fill_runs` — one row per form-fill attempt: `form_url`, `status`
+  (`filling → filled | failed`), scraped `fields` (JSON list), the `mapping`
+  actually applied (JSON `{selector: value}`), and `error`. One-shot: fields
+  are detected, mapped by the LLM, and filled in a single background pass —
+  review/correction happens in the live browser window, not the UI.
 
 Enums are stored as plain strings validated in Python (see the `enum.Enum`
-classes in the model files), not Postgres enum types — keeps migrations simple.
+classes in the model files), not a dialect-specific enum column type — keeps
+migrations simple.
 
 ### Shared utils & the seam (how the two streams connect)
 
@@ -95,17 +122,18 @@ Built and meant for reuse — do not re-invent these in the workstreams:
   attachments=[(bytes, media_type)])` serves **both** vision extraction (stream 2)
   and text field-mapping (stream 3). Failures raise `LLMError`.
 - `app/database.py::session_scope()` — transactional session for out-of-request
-  work (background tasks, the automation worker). Commits/rolls back/closes.
+  work (background tasks). Commits/rolls back/closes. Used by both
+  `_run_extraction` and `_run_form_fill`.
 - `app/core/logging.py` (`configure_logging`/`get_logger`) and
   `app/core/errors.py` (`AppError` + `ExtractionError`/`FormFillError`/`LLMError`,
   mapped to JSON by a handler in `main.py`).
 
-**The seam:** extraction writes loose-JSONB `extraction_results.data` with
+**The seam:** extraction writes loose-JSON `extraction_results.data` with
 whatever keys the LLM finds (form-agnostic — no fixed vocabulary). Grouping is by
 `case_id`. Automation's input is `application_service.build_application_data()`,
 which merges each doc's data into `{"passport": {...}, "g28": {...}}`. At fill
 time the LLM is given **two key-sets** — the extracted-data keys and the scraped
-form's field keys — and generates the mapping between them. This is why the JSONB
+form's field keys — and generates the mapping between them. This is why the JSON
 stays untyped and nothing is tied to a specific form.
 
 ### Upload flow (`backend/app/api/routes/documents.py`)
@@ -168,22 +196,32 @@ treatment for now.
 Gotcha: `rapidocr-onnxruntime` hard-depends on `opencv-python` (not
 `-headless`), which needs `libGL`/`libglib` — pinning the headless variant
 alongside it doesn't help, since pip won't dedupe two differently-named
-packages that both provide `cv2`. The Dockerfile installs `libgl1
-libglib2.0-0` instead of fighting this.
+packages that both provide `cv2`. On Linux hosts, install `libgl1
+libglib2.0-0` (e.g. `apt-get install`) before using `OCR_MODE=rapidocr`; macOS
+ships these already.
 
-### Browser-automation worker (stream 3)
+### Browser-automation form-fill (stream 3)
 
-`form_fill.py` runs in a **separate `automation` container**
-(`automation/Dockerfile`, Playwright base image) under the compose `worker`
-profile — it is not started by `docker compose up`. This keeps heavy browser
-deps out of the `api` image, so `form_fill.py` imports Playwright **lazily**
-inside `fill()`; never add a top-level `playwright` import (it would break the
-api image). Build it with `docker compose --profile worker build automation`.
+`POST /api/form-fill-runs` (`{case_id, form_url}`) creates a `form_fill_runs`
+row and fires `form_fill_service.fill()` **once** as a FastAPI `BackgroundTask`
+(`_run_form_fill` in `routes/form_fill.py`, same `session_scope()` pattern as
+`_run_extraction`). `fill()` scrapes the form's fields, asks the LLM to map
+`application_service.build_application_data()` onto them, fills a **headed**
+(`headless=False`) Chromium via Playwright, and **blocks, holding the browser
+open**, until the user closes the window — that's the review/correction step,
+done live in the browser rather than in the UI. `form_fill.py` imports
+Playwright **lazily** inside `fill()`; never add a top-level `playwright`
+import (it would break importing this module in environments without
+Playwright installed).
+
+Because it opens a *visible* window, `fill()` only works when the API runs on
+a host with a display — see "Running form-fill" above.
 
 Minimal React SPA. `api/client.ts` is the single fetch wrapper (same-origin
-`/api`). `DocumentList.tsx` **polls** `GET /api/documents` every 2.5s so status
-transitions (uploaded → extracted) appear without a reload — there are no
-websockets. `UploadForm.tsx` uses `<input multiple>` for the multi-file case.
+`/api`). `DocumentList.tsx` / `FormFillList.tsx` **poll** their list endpoints
+every 2.5s so status transitions appear without a reload — there are no
+websockets. `UploadForm.tsx` uses `<input multiple>` for the multi-file case;
+`FormFillForm.tsx` picks a Case ID from `GET /api/applications` and a form URL.
 
 ## Conventions
 
@@ -193,8 +231,9 @@ websockets. `UploadForm.tsx` uses `<input multiple>` for the multi-file case.
   `--autogenerate` and review it.
 - Config is centralized in `app/config.py` (pydantic-settings), read from env /
   `.env`. Changing a value is `.env`-only; **adding** a knob means declaring the
-  field once here (with a default), then surfacing it in `.env.example` +
-  `docker-compose.yml`. Never scatter `os.getenv` calls.
+  field once here (with a default), then surfacing it in `backend/.env.example`.
+  Never scatter `os.getenv` calls.
 - The DB is treated as **disposable** in dev — `case_id` was folded into
-  `0001_initial` rather than added as a new migration. Recreate with
-  `docker compose down -v && up`.
+  `0001_initial` rather than added as a new migration. Recreate by deleting
+  `backend/data/alma.db` (and `backend/data/uploads` for a clean upload dir
+  too), then running `alembic upgrade head` again.

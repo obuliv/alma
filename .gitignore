@@ -221,5 +221,8 @@ __marimo__/
 node_modules/
 frontend/dist/
 
-# Local uploads (when running the backend outside Docker)
+# Local SQLite DB + uploaded files
 data/
+
+# run.sh output
+logs/

@@ -123,7 +123,39 @@ button:disabled {
   color: #991b1b;
 }
 
+.badge.filling {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badge.filled {
+  background: #dcfce7;
+  color: #166534;
+}
+
 .muted {
   color: #9ca3af;
   font-size: 0.8rem;
+}
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.tab {
+  background: #fff;
+  color: #4b5563;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab.active {
+  background: #4f46e5;
+  color: #fff;
+  border-color: #4f46e5;
 }

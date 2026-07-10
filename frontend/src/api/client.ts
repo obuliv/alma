@@ -36,6 +36,36 @@ export interface Document {
   extraction: Extraction | null;
 }
 
+export interface ApplicationSummary {
+  id: string;
+  case_id: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FormFillField {
+  selector: string;
+  label: string;
+  input_type: string;
+  options: string[] | null;
+}
+
+export interface FormFillRunSummary {
+  id: string;
+  case_id: string | null;
+  form_url: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FormFillRun extends FormFillRunSummary {
+  fields: FormFillField[];
+  mapping: Record<string, string>;
+  error: string | null;
+}
+
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = res.statusText;
@@ -70,4 +100,29 @@ export async function uploadDocument(
   return handle(
     await fetch("/api/documents", { method: "POST", body: form }),
   );
+}
+
+export async function listApplications(): Promise<ApplicationSummary[]> {
+  return handle(await fetch("/api/applications"));
+}
+
+export async function createFormFillRun(
+  caseId: string,
+  formUrl: string,
+): Promise<FormFillRun> {
+  return handle(
+    await fetch("/api/form-fill-runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ case_id: caseId, form_url: formUrl }),
+    }),
+  );
+}
+
+export async function listFormFillRuns(): Promise<FormFillRunSummary[]> {
+  return handle(await fetch("/api/form-fill-runs"));
+}
+
+export async function getFormFillRun(id: string): Promise<FormFillRun> {
+  return handle(await fetch(`/api/form-fill-runs/${id}`));
 }

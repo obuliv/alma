@@ -6,10 +6,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+psycopg://alma:alma@db:5432/alma"
+    database_url: str = "sqlite:///./data/alma.db"
 
-    # Where uploaded files are written on the mounted volume.
-    upload_dir: str = "/data/uploads"
+    # Where uploaded files are written, relative to the backend's cwd.
+    upload_dir: str = "./data/uploads"
 
     max_upload_mb: int = 10
 
@@ -20,8 +20,9 @@ class Settings(BaseSettings):
         "image/png",
     )
 
-    # Comma-separated origins for CORS. Same-origin (nginx proxy) needs none;
-    # this is a convenience for running the frontend dev server separately.
+    # Comma-separated origins for CORS. The Vite dev server proxies /api so the
+    # browser sees same-origin requests; only needed if something talks to the
+    # API directly cross-origin.
     cors_origins: str = ""
 
     # --- LLM (shared by extraction + form-fill mapping) ---
