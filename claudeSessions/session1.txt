@@ -1,0 +1,1016 @@
+ ▐▛███▜▌   Claude Code v2.1.206
+▝▜█████▛▘  Opus 4.8 · Claude Pro
+  ▘▘ ▝▝    ~/takehome/alma
+
+
+❯ /model                                                                        
+  ⎿  Set model to Opus 4.8 and saved as your default for new sessions
+
+❯ I want you to plan for the following                                          
+  File Upload Interface: Build a simple interface (e.g., using Flask, FastAPI,  
+  a lightweight React front-end, etc) that allows uploading of passport and     
+  G-28 documents (example below).                                               
+      Supported formats: PDF and image (JPEG/PNG).                              
+  Data Extraction:                                                              
+     Implement logic to extract structured data (e.g., full name, date of       
+  birth, country, passport number, address, attorney name, firm, etc.)          
+  Form Population: Use browser automation to:                                   
+      Navigate to the provided form URL                                         
+      Accurately fill in the fields with extracted                              
+                                                                                
+  This is the high level ask, I want you to plan only for the project           
+  structure, dockerized deployment and docker compose so I can easily start and 
+  test this.                                                                    
+  In this design focus only on high level structure and File Upload Interface   
+  and necessary DB parts so that 2 and 3 can be done.                           
+                                                                                
+  And this is an empty project folder.                                          
+
+⏺ This is a greenfield/empty folder, so there's nothing to explore in the
+  codebase. The key decisions here are about stack choices, and those genuinely
+  affect the structure I'll plan. Let me nail those down with you before writing
+  the plan.
+
+⏺ User answered Claude's questions:
+  ⎿  · Which backend framework should anchor the API and upload handling? → 
+     FastAPI (Recommended)
+     · How should the upload UI be delivered? → React (Vite) SPA (Recommended)
+     · What should back the database and file storage? → Postgres + local volume
+     (Recommended)
+     · How much of extraction & form-fill should the plan scaffold now? → Stub 
+     interfaces + DB schema (Recommended)
+
+⏺ All recommended — clean modern stack. Since this is an empty folder there's
+  nothing to explore, and the architecture is greenfield, so I'll write the plan
+  directly rather than spin up agents to guess at a codebase that doesn't
+  exist.
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ The plan is written. Here's the shape of it:
+
+  Foundation only — project structure, Dockerized docker compose deployment, the
+  file-upload interface, and the DB layer. Extraction (2) and form-fill (3) are
+  scaffolded as service interfaces + DB status fields so they slot in later
+  without rework.
+
+  Three containers, single origin (nginx proxies /api → api, so no CORS):
+  - web — React/Vite build served by nginx
+  - api — FastAPI/uvicorn, runs Alembic migrations on startup
+  - db — Postgres 16, with files on a separate uploads volume (DB stores
+  metadata + path, not blobs)
+
+  DB schema anticipates that a passport + G-28 pair one form submission:
+  applications groups documents, and each document gets one extraction_results
+  row with a flexible JSONB data field (so step 2 can evolve without
+  migrations). Status enums drive the upload → extracting → extracted lifecycle.
+
+  Upload flow: POST /api/documents validates by magic bytes (not just
+  client-sent content-type) + size limit, saves the file, records the row, and
+  fires the extraction stub as a background task that manages status transitions
+  — so step 2 only fills in real OCR/LLM logic.
+
+  One thing I pushed on vs. the raw ask: I added an applications grouping table
+  even though it's not strictly needed for upload. Reasoning — form population
+  needs data from both documents together, so without a grouping concept step 3
+  would force a schema migration later. It's cheap now and nullable, so it
+  doesn't complicate the upload path.
+  ⎿  User rejected Claude's plan:
+     ╭─────────────────────────────────────────────────────────────────────────╮
+     │ Plan: Document Upload Platform — Structure, DB & Dockerized Deployment  │
+     │                                                                         │
+     │ Context                                                                 │
+     │                                                                         │
+     │ This is a greenfield project (empty folder). The end goal is a          │
+     │ three-part system:                                                      │
+     │ 1. File upload interface for passport + G-28 documents (PDF/JPEG/PNG)   │
+     │ 2. Data extraction into structured fields (name, DOB, country, passport │
+     │ #, address, attorney, firm, etc.)                                       │
+     │ 3. Form population via browser automation against a target form URL     │
+     │                                                                         │
+     │ This plan scopes only the foundation: project structure, Dockerized     │
+     │ deployment with docker compose, the File Upload Interface, and the      │
+     │ database layer — designed so that extraction (2) and form-fill (3) drop │
+     │ in cleanly later. Those two are scaffolded as service interfaces + DB   │
+     │ status fields, not implemented.                                         │
+     │                                                                         │
+     │ Stack (confirmed with user): FastAPI backend · React (Vite) SPA         │
+     │ frontend · Postgres (SQLAlchemy + Alembic) · uploaded files on a local  │
+     │ mounted volume · extraction & form-fill left as stubbed interfaces.     │
+     │                                                                         │
+     │ Architecture Overview                                                   │
+     │                                                                         │
+     │ Three containers, single origin (nginx in the web container             │
+     │ reverse-proxies /api → api:8000, so no CORS setup needed):              │
+     │                                                                         │
+     │ Browser ──▶ web (nginx: serves React build + proxies /api) ──▶ api      │
+     │ (FastAPI/uvicorn) ──▶ db (Postgres)                                     │
+     │                                                                      │  │
+     │                                                                         │
+     │ └──▶ uploads volume (files on disk)                                     │
+     │                                                                         │
+     │ - docker compose up builds all three and runs the app end-to-end.       │
+     │ - api runs alembic upgrade head on startup, then uvicorn.               │
+     │ - Files stored on disk under a named volume; DB stores metadata + file  │
+     │ path (not blobs).                                                       │
+     │                                                                         │
+     │ Project Structure                                                       │
+     │                                                                         │
+     │ alma/                                                                   │
+     │ ├── docker-compose.yml                                                  │
+     │ ├── .env.example                 # DB creds, MAX_UPLOAD_MB, UPLOAD_DIR, │
+     │ etc.                                                                    │
+     │ ├── README.md                    # how to start & test                  │
+     │ ├── backend/                                                            │
+     │ │   ├── Dockerfile                                                      │
+     │ │   ├── requirements.txt                                                │
+     │ │   ├── alembic.ini                                                     │
+     │ │   ├── alembic/                                                        │
+     │ │   │   ├── env.py                                                      │
+     │ │   │   └── versions/            # initial migration (documents,        │
+     │ extraction_results, applications)                                       │
+     │ │   └── app/                                                            │
+     │ │       ├── main.py              # app factory, router registration,    │
+     │ startup                                                                 │
+     │ │       ├── config.py            # pydantic-settings from env           │
+     │ │       ├── database.py          # engine, SessionLocal, Base           │
+     │ │       ├── models/              # SQLAlchemy: document.py,             │
+     │ extraction.py, application.py                                           │
+     │ │       ├── schemas/             # Pydantic request/response models     │
+     │ │       ├── api/                                                        │
+     │ │       │   ├── deps.py          # get_db dependency                    │
+     │ │       │   └── routes/          # health.py, documents.py,             │
+     │ extraction.py (stub)                                                    │
+     │ │       ├── services/                                                   │
+     │ │       │   ├── storage.py       # save/read/delete files on the volume │
+     │ │       │   ├── extraction.py    # ExtractionService interface — STUB   │
+     │ (raises/returns placeholder)                                            │
+     │ │       │   └── form_fill.py     # FormFillService interface — STUB     │
+     │ │       └── core/                                                       │
+     │ │           └── validation.py    # content-type + magic-byte sniff +    │
+     │ size checks                                                             │
+     │ └── frontend/                                                           │
+     │     ├── Dockerfile               # multi-stage: node build → nginx      │
+     │ serve                                                                   │
+     │     ├── nginx.conf               # serve static + proxy /api → api:8000 │
+     │     ├── package.json                                                    │
+     │     ├── vite.config.ts                                                  │
+     │     ├── index.html                                                      │
+     │     └── src/                                                            │
+     │         ├── main.tsx                                                    │
+     │         ├── App.tsx                                                     │
+     │         ├── api/client.ts        # fetch wrapper hitting /api           │
+     │         └── components/                                                 │
+     │             ├── UploadForm.tsx   # doc_type select + file input +       │
+     │ progress                                                                │
+     │             └── DocumentList.tsx # list w/ status + extraction preview  │
+     │                                                                         │
+     │ Database Schema (initial migration)                                     │
+     │                                                                         │
+     │ Anticipates that a passport + a G-28 together feed one form submission, │
+     │ so documents can group under an application.                            │
+     │                                                                         │
+     │ applications — groups documents for one form-fill run (nullable at      │
+     │ first; a doc can exist unassigned)                                      │
+     │ - id (UUID, pk), status (enum: new | ready | submitting | submitted |   │
+     │ failed), form_url (text, nullable), created_at, updated_at              │
+     │                                                                         │
+     │ documents                                                               │
+     │ - id (UUID, pk)                                                         │
+     │ - application_id (UUID, fk → applications, nullable)                    │
+     │ - doc_type (enum: passport | g28)                                       │
+     │ - original_filename, content_type, file_path, file_size                 │
+     │ - status (enum: uploaded | extracting | extracted | failed)             │
+     │ - created_at, updated_at                                                │
+     │                                                                         │
+     │ extraction_results — one per document (filled in step 2)                │
+     │ - id (UUID, pk), document_id (fk → documents, unique)                   │
+     │ - data (JSONB) — flexible structured fields so step 2 can evolve        │
+     │ without migrations                                                      │
+     │ - raw_text (text, nullable), error (text, nullable), created_at         │
+     │                                                                         │
+     │ Enums as Postgres enum types or string columns with app-level           │
+     │ validation (simpler for migrations — plan uses string + Python Enum).   │
+     │                                                                         │
+     │ File Upload Interface — Endpoints & Flow                                │
+     │                                                                         │
+     │ Backend (api/routes/documents.py):                                      │
+     │ - POST /api/documents — multipart: file + doc_type. Validates           │
+     │ type/size, saves via storage.py, inserts documents row                  │
+     │ (status=uploaded), kicks off extraction as a FastAPI BackgroundTask     │
+     │ calling the stub ExtractionService (sets extracting → placeholder →     │
+     │ extracted/failed). Returns the document record.                         │
+     │ - GET /api/documents — list with status.                                │
+     │ - GET /api/documents/{id} — detail incl. extraction result.             │
+     │ - GET /api/documents/{id}/file — stream the stored file back.           │
+     │ - GET /api/health — liveness/readiness.                                 │
+     │                                                                         │
+     │ Validation (core/validation.py): allow only application/pdf,            │
+     │ image/jpeg, image/png; verify via magic bytes (not just the header the  │
+     │ client sends); enforce MAX_UPLOAD_MB (env, default 10). Reject with     │
+     │ 400/413 + clear message.                                                │
+     │                                                                         │
+     │ Frontend: single page — UploadForm (choose passport/G-28, pick file,    │
+     │ show upload progress + validation errors) and DocumentList (poll GET    │
+     │ /api/documents, show status badge and — once extraction exists — the    │
+     │ extracted fields). Uses same-origin /api calls.                         │
+     │                                                                         │
+     │ Stubs (so steps 2 & 3 slot in)                                          │
+     │                                                                         │
+     │ - services/extraction.py: class ExtractionService with                  │
+     │ extract(document) -> ExtractionResult. Initial body returns an          │
+     │ empty/placeholder data and marks status extracted, or is                │
+     │ feature-flagged off. The upload flow already calls it and manages       │
+     │ status transitions, so step 2 only fills in real OCR/LLM logic.         │
+     │ - services/form_fill.py: class FormFillService with fill(application,   │
+     │ form_url). Not wired to an endpoint yet; documented as the entry point  │
+     │ for step 3 (Playwright/browser automation), which the user opted to add │
+     │ later.                                                                  │
+     │                                                                         │
+     │ Docker & Compose                                                        │
+     │                                                                         │
+     │ db — postgres:16-alpine, pgdata named volume, healthcheck (pg_isready). │
+     │ api — build ./backend; depends_on: db (condition: service_healthy); env │
+     │ from .env; mounts uploads named volume at UPLOAD_DIR; command: alembic  │
+     │ upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000.        │
+     │ Backend Dockerfile: python:3.12-slim, install requirements.txt.         │
+     │ web — build ./frontend (multi-stage: node:20 build → nginx:alpine       │
+     │ serve); nginx.conf serves the SPA and proxies /api → api:8000;          │
+     │ published on host port (e.g. 8080:80).                                  │
+     │                                                                         │
+     │ .env.example covers POSTGRES_*, DATABASE_URL, UPLOAD_DIR,               │
+     │ MAX_UPLOAD_MB, allowed types. Named volumes: pgdata, uploads.           │
+     │                                                                         │
+     │ Key requirements.txt: fastapi, uvicorn[standard], sqlalchemy, alembic,  │
+     │ psycopg[binary], pydantic-settings, python-multipart, filetype          │
+     │ (magic-byte sniffing).                                                  │
+     │                                                                         │
+     │ Verification (end-to-end)                                               │
+     │                                                                         │
+     │ 1. cp .env.example .env && docker compose up --build — all three        │
+     │ services come up; db healthy, api runs migrations, web serves.          │
+     │ 2. Open http://localhost:8080 → upload a sample passport PDF and a G-28 │
+     │ image; confirm both appear in the list with uploaded → extracted        │
+     │ (placeholder) status.                                                   │
+     │ 3. Hit FastAPI docs at http://localhost:8080/api/docs (proxied) or      │
+     │ http://localhost:8000/docs; exercise POST /api/documents, GET           │
+     │ /api/documents, GET /api/documents/{id}/file.                           │
+     │ 4. Negative tests: upload a .txt / oversized file → expect 400/413 with │
+     │ a clear message.                                                        │
+     │ 5. Confirm persistence: docker compose down && up → documents still     │
+     │ listed (Postgres volume) and files still downloadable (uploads volume). │
+     │ 6. docker compose exec db psql → verify rows in documents /             │
+     │ extraction_results.                                                     │
+     │                                                                         │
+     │ Out of Scope (later phases)                                             │
+     │                                                                         │
+     │ - Real extraction (OCR/LLM) — interface only.                           │
+     │ - Playwright browser automation / form submission — interface only.     │
+     │ - Auth, multi-user, cloud object storage (local volume is sufficient    │
+     │ for this deliverable).                                                  │
+     ╰─────────────────────────────────────────────────────────────────────────╯
+
+⏺ Good catch — a passport photographed page-by-page, or a multi-page G-28 saved
+  as several JP/PNGs, means one logical document can have many files. My current
+  schema conflated "document" with "single file," which breaks that. Let me fix
+  the model.
+
+  The change: split the logical document from its constituent files.
+
+  - documents (logical) — id, application_id, doc_type, status. One passport =
+  one row.
+  - document_files (pages/images) — id, document_id (fk), original_filename,
+  content_type, file_path, file_size, page_order, created_at. Many rows per
+  document.
+  - extraction_results — stays one-per-document; extraction reads all files of
+  that document and produces one merged record.
+
+  Upload flow becomes: POST /api/documents accepts multiple files in one
+  multipart request (files[] + doc_type) → creates one documents row + N
+  document_files rows (ordered), then fires the extraction stub once over the
+  whole set. Plus POST /api/documents/{id}/files to append more pages to an
+  existing document. Each file is still validated individually (magic bytes +
+  size). PDFs stay single-file-but-multi-page internally; images are the
+  multi-file case.
+
+  Let me update the plan file to reflect this.
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ Updated the plan to handle multiple files per document. Summary of the fix:
+
+  - New document_files table — splits the logical document (one passport / one
+  G-28) from its constituent files. A passport shot as two JPGs = one documents
+  row + two document_files rows (ordered by page_order).
+  - POST /api/documents now accepts files (one or many) in a single multipart
+  request; extraction fires once over the whole document set, not per file.
+  - POST /api/documents/{id}/files to append pages later, plus a DELETE to
+  remove a wrongly-added page.
+  - Multi-page PDFs stay a single file (pages live inside the PDF); the
+  multi-file case is specifically images.
+  - Frontend <input multiple> with a page-list preview; DocumentList shows a
+  page count.
+  - Verification now exercises the multi-JPG passport + append-page flow.
+
+  The plan file at /Users/obuli/.claude/plans/breezy-splashing-spark.md reflects
+  all of this.
+
+⏺ User approved Claude's plan
+  ⎿  Plan saved to: ~/.claude/plans/breezy-splashing-spark.md · /plan to edit
+     Plan: Document Upload Platform — Structure, DB & Dockerized Deployment
+
+     Context
+
+     This is a greenfield project (empty folder). The end goal is a three-part
+     system:
+     1. File upload interface for passport + G-28 documents (PDF/JPEG/PNG)
+     2. Data extraction into structured fields (name, DOB, country, passport #,
+     address, attorney, firm, etc.)
+     3. Form population via browser automation against a target form URL
+
+     This plan scopes only the foundation: project structure, Dockerized
+     deployment with docker compose, the File Upload Interface, and the database
+     layer — designed so that extraction (2) and form-fill (3) drop in cleanly
+     later. Those two are scaffolded as service interfaces + DB status fields,
+     not implemented.
+
+     Stack (confirmed with user): FastAPI backend · React (Vite) SPA frontend ·
+     Postgres (SQLAlchemy + Alembic) · uploaded files on a local mounted volume
+     · extraction & form-fill left as stubbed interfaces.
+
+     Architecture Overview
+
+     Three containers, single origin (nginx in the web container reverse-proxies
+     /api → api:8000, so no CORS setup needed):
+
+     Browser ──▶ web (nginx: serves React build + proxies /api) ──▶ api
+     (FastAPI/uvicorn) ──▶ db (Postgres)
+                                                                          │
+                                                                          └──▶
+     uploads volume (files on disk)
+
+     - docker compose up builds all three and runs the app end-to-end.
+     - api runs alembic upgrade head on startup, then uvicorn.
+     - Files stored on disk under a named volume; DB stores metadata + file path
+     (not blobs).
+
+     Project Structure
+
+     alma/
+     ├── docker-compose.yml
+     ├── .env.example                 # DB creds, MAX_UPLOAD_MB, UPLOAD_DIR,
+     etc.
+     ├── README.md                    # how to start & test
+     ├── backend/
+     │   ├── Dockerfile
+     │   ├── requirements.txt
+     │   ├── alembic.ini
+     │   ├── alembic/
+     │   │   ├── env.py
+     │   │   └── versions/            # initial migration (documents,
+     extraction_results, applications)
+     │   └── app/
+     │       ├── main.py              # app factory, router registration,
+     startup
+     │       ├── config.py            # pydantic-settings from env
+     │       ├── database.py          # engine, SessionLocal, Base
+     │       ├── models/              # SQLAlchemy: document.py, extraction.py,
+     application.py
+     │       ├── schemas/             # Pydantic request/response models
+     │       ├── api/
+     │       │   ├── deps.py          # get_db dependency
+     │       │   └── routes/          # health.py, documents.py, extraction.py
+     (stub)
+     │       ├── services/
+     │       │   ├── storage.py       # save/read/delete files on the volume
+     │       │   ├── extraction.py    # ExtractionService interface — STUB
+     (raises/returns placeholder)
+     │       │   └── form_fill.py     # FormFillService interface — STUB
+     │       └── core/
+     │           └── validation.py    # content-type + magic-byte sniff + size
+     checks
+     └── frontend/
+         ├── Dockerfile               # multi-stage: node build → nginx serve
+         ├── nginx.conf               # serve static + proxy /api → api:8000
+         ├── package.json
+         ├── vite.config.ts
+         ├── index.html
+         └── src/
+             ├── main.tsx
+             ├── App.tsx
+             ├── api/client.ts        # fetch wrapper hitting /api
+             └── components/
+                 ├── UploadForm.tsx   # doc_type select + file input + progress
+                 └── DocumentList.tsx # list w/ status + extraction preview
+
+     Database Schema (initial migration)
+
+     Anticipates that a passport + a G-28 together feed one form submission, so
+     documents can group under an application.
+
+     applications — groups documents for one form-fill run (nullable at first; a
+     doc can exist unassigned)
+     - id (UUID, pk), status (enum: new | ready | submitting | submitted | 
+     failed), form_url (text, nullable), created_at, updated_at
+
+     documents — a logical document (one passport, one G-28), which may span
+     many files/pages
+     - id (UUID, pk)
+     - application_id (UUID, fk → applications, nullable)
+     - doc_type (enum: passport | g28)
+     - status (enum: uploaded | extracting | extracted | failed)
+     - created_at, updated_at
+
+     document_files — the actual uploaded files/pages belonging to a document
+     (many per document)
+     - id (UUID, pk), document_id (fk → documents)
+     - original_filename, content_type, file_path, file_size
+     - page_order (int) — order the files were uploaded / should be read
+     - created_at
+
+     ▎ A passport shot as separate JPGs (bio page, address page), or a 
+     ▎ multi-page G-28 saved as several PNGs, becomes one documents row + N 
+     ▎ document_files rows. A single multi-page PDF is one document_files row 
+     ▎ (pages handled inside the PDF). Extraction reads all of a document's 
+     ▎ files and produces one merged result.
+
+     extraction_results — one per document, aggregating across all its files
+     (filled in step 2)
+     - id (UUID, pk), document_id (fk → documents, unique)
+     - data (JSONB) — flexible structured fields so step 2 can evolve without
+     migrations
+     - raw_text (text, nullable), error (text, nullable), created_at
+
+     Enums as Postgres enum types or string columns with app-level validation
+     (simpler for migrations — plan uses string + Python Enum).
+
+     File Upload Interface — Endpoints & Flow
+
+     Backend (api/routes/documents.py):
+     - POST /api/documents — multipart: files (one or many) + doc_type.
+     Validates each file's type/size, saves each via storage.py, inserts one
+     documents row (status=uploaded) + one document_files row per file (with
+     page_order), then kicks off extraction once as a FastAPI BackgroundTask
+     calling the stub ExtractionService over the whole document (sets extracting
+     → placeholder → extracted/failed). Returns the document record with its
+     files.
+     - POST /api/documents/{id}/files — append more files/pages to an existing
+     document (re-triggers extraction).
+     - GET /api/documents — list with status + file counts.
+     - GET /api/documents/{id} — detail incl. its files and extraction result.
+     - GET /api/documents/{id}/files/{file_id} — stream a stored file back.
+     - DELETE /api/documents/{id}/files/{file_id} — remove a mistakenly-added
+     page.
+     - GET /api/health — liveness/readiness.
+
+     Validation (core/validation.py): allow only application/pdf, image/jpeg,
+     image/png; verify via magic bytes (not just the header the client sends);
+     enforce MAX_UPLOAD_MB (env, default 10). Reject with 400/413 + clear
+     message.
+
+     Frontend: single page — UploadForm (choose passport/G-28, select one or 
+     multiple files via <input multiple>, preview the chosen page list, show
+     upload progress + per-file validation errors) and DocumentList (poll GET 
+     /api/documents, show status badge, file/page count, and — once extraction
+     exists — the extracted fields). Uses same-origin /api calls.
+
+     Stubs (so steps 2 & 3 slot in)
+
+     - services/extraction.py: class ExtractionService with extract(document) ->
+     ExtractionResult. Initial body returns an empty/placeholder data and marks
+     status extracted, or is feature-flagged off. The upload flow already calls
+     it and manages status transitions, so step 2 only fills in real OCR/LLM
+     logic.
+     - services/form_fill.py: class FormFillService with fill(application, 
+     form_url). Not wired to an endpoint yet; documented as the entry point for
+     step 3 (Playwright/browser automation), which the user opted to add later.
+
+     Docker & Compose
+
+     db — postgres:16-alpine, pgdata named volume, healthcheck (pg_isready).
+     api — build ./backend; depends_on: db (condition: service_healthy); env
+     from .env; mounts uploads named volume at UPLOAD_DIR; command: alembic 
+     upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000. Backend
+     Dockerfile: python:3.12-slim, install requirements.txt.
+     web — build ./frontend (multi-stage: node:20 build → nginx:alpine serve);
+     nginx.conf serves the SPA and proxies /api → api:8000; published on host
+     port (e.g. 8080:80).
+
+     .env.example covers POSTGRES_*, DATABASE_URL, UPLOAD_DIR, MAX_UPLOAD_MB,
+     allowed types. Named volumes: pgdata, uploads.
+
+     Key requirements.txt: fastapi, uvicorn[standard], sqlalchemy, alembic,
+     psycopg[binary], pydantic-settings, python-multipart, filetype (magic-byte
+     sniffing).
+
+     Verification (end-to-end)
+
+     1. cp .env.example .env && docker compose up --build — all three services
+     come up; db healthy, api runs migrations, web serves.
+     2. Open http://localhost:8080 → upload a passport as two JPGs at once and a
+     G-28 as a multi-page PDF; confirm the passport shows as one document with
+     2 files/pages, and both documents move uploaded → extracted (placeholder).
+     Then append another page to the passport via POST /api/documents/{id}/files
+     and confirm the count updates.
+     3. Hit FastAPI docs at http://localhost:8080/api/docs (proxied) or
+     http://localhost:8000/docs; exercise POST /api/documents, GET 
+     /api/documents, GET /api/documents/{id}/file.
+     4. Negative tests: upload a .txt / oversized file → expect 400/413 with a
+     clear message.
+     5. Confirm persistence: docker compose down && up → documents still listed
+     (Postgres volume) and files still downloadable (uploads volume).
+     6. docker compose exec db psql → verify rows in documents /
+     extraction_results.
+
+     Out of Scope (later phases)
+
+     - Real extraction (OCR/LLM) — interface only.
+     - Playwright browser automation / form submission — interface only.
+     - Auth, multi-user, cloud object storage (local volume is sufficient for
+     this deliverable).
+
+⏺ Plan approved. Let me set up a task list and start building.
+⏺ Starting with the backend scaffold.
+
+.....
+
+  What was built
+
+  A dockerized foundation for the document platform — the file-upload interface
+  + DB layer, with extraction and form-fill scaffolded as service interfaces so
+  steps 2 & 3 drop in without schema/API rework.
+
+  alma/
+  ├── docker-compose.yml        # db (postgres) + api (fastapi) + web
+  (nginx/react)
+  ├── .env.example · README.md
+  ├── backend/                  # FastAPI, SQLAlchemy, Alembic
+  │   ├── app/{config,database,main}.py
+  │   ├── app/models/           # applications, documents, document_files,
+  extraction_results
+  │   ├── app/api/routes/       # documents.py, health.py
+  │   ├── app/services/         # storage.py, extraction.py (stub), form_fill.py
+  (stub)
+  │   └── app/core/validation.py  # magic-byte + size checks
+  └── frontend/                 # React (Vite) SPA + nginx reverse proxy
+
+  Verified live (docker compose up)
+
+  ┌────────────────────────────┬────────────────────────────────────────────┐
+  │           Check            │                   Result                   │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ Migrations run on api      │ ✅ 0001_initial applied                    │
+  │ startup                    │                                            │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ Upload passport as 2 PNGs  │ ✅ one document, 2 files, page_order 0/1   │
+  │ at once                    │                                            │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ Upload G-28 as PDF         │ ✅                                         │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ Background extraction      │ ✅ uploaded → extracted, placeholder       │
+  │                            │ fields persisted                           │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ List with file counts      │ ✅                                         │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ Append page                │ ✅ file count 2→3, order 0/1/2             │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ Download file              │ ✅ correct content-type, bytes intact      │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ Reject .txt / bad doc_type │ ✅ HTTP 400 with clear message             │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ nginx serves SPA + proxies │ ✅ single-origin, HTTP 200                 │
+  │  /api                      │                                            │
+  ├────────────────────────────┼────────────────────────────────────────────┤
+  │ Persistence across restart │ ✅ documents + files survive               │
+  └────────────────────────────┴────────────────────────────────────────────┘
+
+  Key design decisions
+
+  - document_files split from documents — a passport shot as multiple images is
+  one logical document with N files (your multi-file question).
+  - Magic-byte validation, not the client-sent content type — a renamed .txt is
+  correctly rejected.
+  - Single origin via nginx proxy — no CORS to configure.
+  - applications grouping table included now (nullable) so step 3's form-fill,
+  which needs passport + G-28 together, won't force a later migration.
+
+  To run
+
+  cp .env.example .env
+  docker compose up --build
+  UI → http://localhost:8080 · Swagger → http://localhost:8000/docs
+
+  The stack is currently torn down (volumes preserved). One note: I generated
+  tiny synthetic test files with valid headers for verification — real
+  extraction (step 2) will need actual document samples.
+
+  Want me to save a short project-memory note capturing the stack + the
+  "documents vs document_files" model decision for future sessions?
+
+✻ Brewed for 11m 0s
+
+❯ before I fork on 2 workstreams (data extraction and browser automation), I    
+  want to add some utils that will be shared by both like config management,    
+  LLM calls and DB utils if needed. Let me know if i am missing anything that   
+  will be needed before I start working parallely on those workstreams          
+
+⏺ Let me read the existing plan and confirm the current state of the files these
+  utils would touch, so my recommendations are grounded in what's actually
+  there.
+
+  Read 4 files (ctrl+o to expand)
+
+⏺ I built this codebase, so I have full context — no need to spawn explorers to
+  re-derive it. Let me give you my read, then pin down a few branch points.
+
+  Quick assessment of what you proposed:
+  - Config — already exists (app/config.py, pydantic-settings Settings + cached
+  settings singleton). This is an extension (add LLM + browser keys), not a new
+  util. Good.
+  - LLM calls — genuinely new and shared. Worth a thin Anthropic wrapper with
+  structured-output + retries.
+  - DB utils — there's a real gap: the background task in documents.py
+  (_run_extraction) hand-rolls SessionLocal() with try/finally. A shared
+  session_scope() context manager fixes that and gives both workstreams one
+  pattern.
+
+  What you're missing (the important part): the biggest risk in forking two
+  parallel streams here isn't the utils you listed — it's the seam between them.
+  Extraction produces extraction_results.data (currently just an untyped
+  EXPECTED_FIELDS tuple → JSONB); automation consumes it to fill the form. If
+  both sides fork without a single typed contract, they'll diverge on field
+  names/shape and you'll pay for it at integration. Also: automation fills one 
+  form from both documents (passport + G-28 attorney data), but nothing today
+  groups documents into an application or merges their data — so automation's
+  input doesn't exist yet.
+
+  Let me confirm a few decisions before I write the plan.
+
+⏺ User answered Claude's questions:
+  ⎿  · Which LLM SDK should the shared client wrap? → Provider-agnostic wrapper
+     · How should the extraction→automation data seam be defined? (This is the 
+     contract both workstreams depend on.) → Keep loose JSONB dict
+     · Which additional shared foundations should this PR include now vs. defer 
+     to the workstreams? → Application grouping + merge, Logging + error types, 
+     Playwright-ready Docker, For the form-fill mapping side can we assume we 
+     will extract the fields needed from the form and then we will use LLM to 
+     decide which keys extracted from uploaded files map to which form fields. 
+     Another thing, when I upload is it possible to enter case ID and use that 
+     as key so at the time of form filling we can decide which data to use.
+
+⏺ Got it — and your form-fill answer actually resolves my concern about the
+  loose JSONB. Since you'll use an LLM at fill-time to map extracted keys → the 
+  form's fields, the LLM bridges the seam, so a rigid typed contract isn't
+  required. That's a coherent design; I'll drop the push for typed schemas and
+  instead keep a soft documented key vocabulary so the extractor and the mapper
+  share the same words.
+
+  Your two additions reshape the "grouping + merge" piece meaningfully:
+  - Case ID at upload → I'll add a human-entered case_id on applications
+  (get-or-create on upload), so documents group by case and form-fill selects
+  data by case ID. Needs a migration + an upload field.
+  - LLM field-mapping at fill time → the shared LLM client needs to serve both
+  uses: vision extraction (stream 2) and text field-mapping (stream 3). I'll
+  design it generic enough for both.
+
+  Let me write the plan. This is a different task from the old upload plan, so
+  I'll overwrite it.
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ Plan written. Summary of what it covers and the reasoning:
+
+  Your three utils — refined:
+  - Config → extend the existing Settings (LLM keys/model + browser/form
+  settings). It already exists; not a rebuild.
+  - LLM calls → provider-agnostic LLMClient ABC + AnthropicLLMClient, with
+  complete_json(attachments=...) so it serves both streams: vision extraction
+  (stream 2) and text field-mapping (stream 3).
+  - DB utils → session_scope() context manager for out-of-request work,
+  replacing the hand-rolled session in _run_extraction.
+
+  What you were missing, now in scope:
+  - The seam — explicitly documented: extraction writes loose JSONB → grouped by
+  case_id → build_application_data() merged dict → fill-time LLM maps it to
+  form fields. Your LLM-mapping choice is what makes loose JSONB safe, so I
+  stated that dependency plainly.
+  - Case ID + grouping/merge — applications.case_id (migration), get-or-create
+  on upload, a merge service, and GET /api/applications/{case_id}. This is
+  automation's actual input, which didn't exist before.
+  - Logging + error types, and Playwright-ready Docker as a separate
+  worker-profile service (keeps browser deps out of the api image; form_fill
+  stays import-safe via lazy import).
+
+  Two things I pushed back on / flagged:
+  1. I dropped the typed-contract recommendation once your fill-time LLM mapper
+  justified loose JSONB — but kept EXPECTED_FIELDS as a soft shared vocabulary
+  so the extractor and mapper don't invent divergent key names. Worth agreeing
+  on that key list before both streams start.
+  2. I defaulted case_id to optional (uploads without a case still work). Say if
+  you'd rather make it required.
+
+  One open call I made for you: the automation container is scaffolded but not
+  started by default (compose worker profile), so docker compose up stays
+  lightweight. Flag if you'd prefer it always-on.
+  ⎿  User rejected Claude's plan:
+     ╭─────────────────────────────────────────────────────────────────────────╮
+     │ Plan: Shared Foundations Before Forking (Extraction + Browser           │
+     │ Automation)                                                             │
+     │                                                                         │
+     │ Context                                                                 │
+     │                                                                         │
+     │ The upload interface + DB + Docker foundation is built and verified.    │
+     │ Next, work                                                              │
+     │ forks into two parallel streams:                                        │
+     │ - Stream 2 — Data extraction: read a document's files (vision LLM) →    │
+     │ structured data.                                                        │
+     │ - Stream 3 — Browser automation: open the target form, scrape its       │
+     │ fields, use an                                                          │
+     │ LLM to map extracted keys → form fields, and fill.                      │
+     │                                                                         │
+     │ This PR builds the shared plumbing both streams depend on, plus the     │
+     │ integration seam, so the two can be developed independently without     │
+     │ diverging. Nothing here implements the real extraction or form-fill     │
+     │ logic — the                                                             │
+     │ two service stubs stay stubs, but are rewired to consume the new shared │
+     │ utils.                                                                  │
+     │                                                                         │
+     │ Decisions (from user):                                                  │
+     │ - LLM client is provider-agnostic (interface + Anthropic                │
+     │ implementation, config-selected).                                       │
+     │ - Extraction↔automation data is loose JSONB — acceptable because the    │
+     │ fill-time                                                               │
+     │ LLM mapper reconciles keys → form fields (no rigid typed contract       │
+     │ needed).                                                                │
+     │ - Include now: case_id grouping + merge, logging + error types,         │
+     │ Playwright-ready Docker.                                                │
+     │ - Defer: job queue (keep FastAPI BackgroundTasks).                      │
+     │ - New: Case ID entered at upload, used to group docs and select data at │
+     │ fill time.                                                              │
+     │                                                                         │
+     │ Reuse (already present — do not rebuild)                                │
+     │                                                                         │
+     │ - app/config.py — Settings (pydantic-settings) + cached settings        │
+     │ singleton. Extend, don't replace.                                       │
+     │ - app/database.py — engine, SessionLocal, Base.                         │
+     │ - app/services/storage.py — read_file() for feeding bytes to the LLM.   │
+     │ - app/services/extraction.py / form_fill.py — stubs to rewire.          │
+     │ - app/models/application.py — applications table +                      │
+     │ documents.application_id FK already exist.                              │
+     │ - _run_extraction in app/api/routes/documents.py — hand-rolled session  │
+     │ to refactor onto the new util.                                          │
+     │                                                                         │
+     │ Deliverables                                                            │
+     │                                                                         │
+     │ 1. Config extensions — app/config.py                                    │
+     │                                                                         │
+     │ Add fields (+ surface in .env.example and docker-compose.yml):          │
+     │ - LLM: llm_provider="anthropic", anthropic_api_key, llm_model,          │
+     │ llm_max_tokens, llm_timeout_s.                                          │
+     │ - Automation: form_url (default target), browser_headless=True,         │
+     │ browser_timeout_ms.                                                     │
+     │                                                                         │
+     │ 2. Provider-agnostic LLM client — app/services/llm.py                   │
+     │                                                                         │
+     │ - class LLMClient (ABC): complete(system, user) -> str and              │
+     │ complete_json(system, user, attachments: list[tuple[bytes, str]] = [])  │
+     │ -> dict                                                                 │
+     │ where attachments are (bytes, media_type) for images/PDFs (Anthropic    │
+     │ accepts                                                                 │
+     │ both natively as content blocks).                                       │
+     │ - class AnthropicLLMClient(LLMClient) — wraps the anthropic SDK: builds │
+     │ image/document blocks, requests structured JSON (tool-use / JSON),      │
+     │ retries,                                                                │
+     │ model + timeout from settings.                                          │
+     │ - get_llm_client() -> LLMClient factory, selects impl by                │
+     │ settings.llm_provider.                                                  │
+     │ - Raises LLMError on failure.                                           │
+     │ - Both streams use it: stream 2 → complete_json(..., attachments=<doc   │
+     │ files>);                                                                │
+     │ stream 3 → complete_json(system=<map form fields to values>, user=<form │
+     │ fields + merged data>).                                                 │
+     │ The client stays generic; the prompts live in each service.             │
+     │                                                                         │
+     │ 3. DB session util — app/database.py                                    │
+     │                                                                         │
+     │ - @contextmanager session_scope() — yields a Session, commits on        │
+     │ success,                                                                │
+     │ rolls back on exception, always closes. For work outside the request    │
+     │ cycle                                                                   │
+     │ (background tasks, the automation worker, CLIs).                        │
+     │ - Refactor _run_extraction (documents.py) to use it (representative     │
+     │ call site).                                                             │
+     │                                                                         │
+     │ 4. Logging + errors                                                     │
+     │                                                                         │
+     │ - app/core/logging.py — configure_logging() (called in main.create_app) │
+     │ + get_logger(name).                                                     │
+     │ - app/core/errors.py — AppError base; ExtractionError, FormFillError,   │
+     │ LLMError.                                                               │
+     │ Optional exception handler in main.py mapping AppError → JSON response. │
+     │                                                                         │
+     │ 5. Case / application grouping + merge (automation's input)             │
+     │                                                                         │
+     │ - Migration 0002_add_case_id: add applications.case_id (String, unique, │
+     │ indexed, nullable);                                                     │
+     │ add case_id to app/models/application.py.                               │
+     │ - Upload change (documents.py, POST /api/documents + append): accept    │
+     │ optional                                                                │
+     │ case_id form field → get-or-create Application by case_id → set         │
+     │ document.application_id.                                                │
+     │ - app/services/application_service.py:                                  │
+     │   - get_or_create_by_case_id(db, case_id) -> Application                │
+     │   - build_application_data(application) -> dict → merged view           │
+     │ {"passport": <passport doc data>, "g28": <g28 doc data>} from each      │
+     │ document's                                                              │
+     │ extraction_results.data. This is exactly what the fill-time LLM mapper  │
+     │ consumes.                                                               │
+     │ - app/api/routes/applications.py: GET /api/applications,                │
+     │ GET /api/applications/{case_id} (documents + merged data).              │
+     │ - app/schemas/application.py: ApplicationOut, ApplicationData (loose    │
+     │ dict passthrough).                                                      │
+     │ - Frontend: UploadForm.tsx gains an optional Case ID text input;        │
+     │ api/client.ts uploadDocument() sends case_id; list view may group by    │
+     │ case (minimal).                                                         │
+     │                                                                         │
+     │ 6. Playwright-ready Docker (prep for stream 3)                          │
+     │                                                                         │
+     │ - automation/Dockerfile scaffold: FROM                                  │
+     │ mcr.microsoft.com/playwright/python:v1.x                                │
+     │ (or python-slim + playwright install --with-deps), reusing backend      │
+     │ code.                                                                   │
+     │ - docker-compose.yml: add an automation service under a worker profile  │
+     │ (not started by default), sharing db + uploads + env. Keeps heavy       │
+     │ browser                                                                 │
+     │ deps out of the api image.                                              │
+     │ - Keep form_fill.py import-safe: no top-level playwright import that    │
+     │ would                                                                   │
+     │ break the api image (import lazily inside the method).                  │
+     │                                                                         │
+     │ 7. Soft key vocabulary (concession to loose JSONB)                      │
+     │                                                                         │
+     │ - Keep EXPECTED_FIELDS in extraction.py as the documented canonical     │
+     │ keys both                                                               │
+     │ streams reference (extractor emits them; mapper reads them).            │
+     │ Non-enforcing — the                                                     │
+     │ LLM still reconciles at fill time, but shared vocabulary reduces drift. │
+     │                                                                         │
+     │ The seam, stated explicitly (so both streams agree)                     │
+     │                                                                         │
+     │ 1. Extraction (stream 2) writes per-document extraction_results.data —  │
+     │ loose JSONB, keys ≈ EXPECTED_FIELDS.                                    │
+     │ 2. Grouping: documents share an application via case_id (entered at     │
+     │ upload).                                                                │
+     │ 3. Automation (stream 3) input = build_application_data(application)    │
+     │ merged dict, selected by case_id.                                       │
+     │ 4. Fill flow (stream 3, documented): open form_url → scrape form fields │
+     │ →                                                                       │
+     │ LLMClient.complete_json(form_fields + merged_data) → {form_field:       │
+     │ value} → fill.                                                          │
+     │ The LLM bridges loose keys → form fields, which is why (1) can stay     │
+     │ untyped.                                                                │
+     │                                                                         │
+     │ Files                                                                   │
+     │                                                                         │
+     │ New: app/services/llm.py, app/core/logging.py, app/core/errors.py,      │
+     │ app/services/application_service.py, app/api/routes/applications.py,    │
+     │ app/schemas/application.py, alembic/versions/0002_add_case_id.py,       │
+     │ automation/Dockerfile.                                                  │
+     │ Modified: app/config.py, app/database.py, app/main.py,                  │
+     │ app/api/routes/documents.py, app/models/application.py,                 │
+     │ app/services/extraction.py                                              │
+     │ (wiring only — stays a stub), app/services/form_fill.py (lazy import +  │
+     │ consumes merged data),                                                  │
+     │ frontend/src/components/UploadForm.tsx, frontend/src/api/client.ts,     │
+     │ .env.example, docker-compose.yml, README.md, CLAUDE.md.                 │
+     │                                                                         │
+     │ Stays a stub (the two streams implement these)                          │
+     │                                                                         │
+     │ - extraction._extract → real vision extraction (now calls               │
+     │ get_llm_client()).                                                      │
+     │ - form_fill.fill → real Playwright + LLM mapping (now has merged        │
+     │ application data + client + config).                                    │
+     │                                                                         │
+     │ Verification                                                            │
+     │                                                                         │
+     │ - docker compose up --build — 0002_add_case_id applies cleanly.         │
+     │ - Upload a passport and a G-28 with the same Case ID → both attach to   │
+     │ one                                                                     │
+     │ application; GET /api/applications/<case_id> returns both documents +   │
+     │ merged                                                                  │
+     │ {"passport": {...}, "g28": {...}} data.                                 │
+     │ - Upload without a Case ID still works (application_id stays null).     │
+     │ - get_llm_client() returns the Anthropic client; with a dummy key a     │
+     │ complete_json                                                           │
+     │ call raises LLMError (mock/network-guarded, no real spend).             │
+     │ - session_scope() commits on success and rolls back on raised           │
+     │ exception.                                                              │
+     │ - configure_logging() emits structured logs on startup + upload.        │
+     │ - import app.services.form_fill succeeds in the api image (no           │
+     │ Playwright installed there).                                            │
+     │ - docker compose --profile worker build automation builds the           │
+     │ Playwright image.                                                       │
+     ╰─────────────────────────────────────────────────────────────────────────╯
+
+⏺ Good — both are easy clarifications, and the second one actually simplifies
+  the plan.
+
+.....
+
+⏺ Done. The shared foundations are built and verified end-to-end in Docker.
+
+  What was added
+
+  Shared utils (both streams consume these):
+  - app/services/llm.py — provider-agnostic LLMClient ABC + AnthropicLLMClient +
+  get_llm_client(). complete_json(..., attachments=[(bytes, media_type)])
+  serves both vision extraction and text field-mapping. Retries, config-driven,
+  failures → LLMError.
+  - app/database.py::session_scope() — transactional session for out-of-request
+  work; refactored _run_extraction onto it.
+  - app/core/logging.py + app/core/errors.py — structured logging and domain
+  exceptions, with an AppError→JSON handler in main.py.
+  - Config extended in app/config.py (LLM + browser settings), plumbed through
+  .env.example and compose. .env-driven per your question.
+
+  The seam / case grouping:
+  - applications.case_id (folded into 0001_initial, DB recreated), optional
+  case_id on upload → get-or-create application.
+  - application_service.py — get_or_create_by_case_id + build_application_data →
+  {"passport": {...}, "g28": {...}}.
+  - GET /api/applications + GET /api/applications/{case_id} (merged, fill-ready
+  data).
+  - Frontend: Case ID input + client change.
+
+  Playwright-ready Docker:
+  - automation/Dockerfile (Playwright base, reuses backend code) + compose
+  worker-profile service (not started by default). form_fill.py rewired to
+  consume merged data with a lazy Playwright import so the api image stays
+  clean.
+
+  Verified live
+
+  ┌─────────────────────────────────────────────────┬────────────────────────┐
+  │                      Check                      │         Result         │
+  ├─────────────────────────────────────────────────┼────────────────────────┤
+  │ Migration w/ case_id + unique index             │ ✅                     │
+  ├─────────────────────────────────────────────────┼────────────────────────┤
+  │ Passport + G-28, same Case ID → one application │ ✅ same app UUID       │
+  ├─────────────────────────────────────────────────┼────────────────────────┤
+  │ GET /applications/{case_id} merged data         │ ✅ {passport, g28}     │
+  ├─────────────────────────────────────────────────┼────────────────────────┤
+  │ No-case upload still works                      │ ✅ application_id=null │
+  ├─────────────────────────────────────────────────┼────────────────────────┤
+  │ form_fill imports in api (no Playwright)        │ ✅                     │
+  ├─────────────────────────────────────────────────┼────────────────────────┤
+  │ LLM client → LLMError on bad key (2 retries)    │ ✅                     │
+  ├─────────────────────────────────────────────────┼────────────────────────┤
+  │ session_scope commit + rollback                 │ ✅ both                │
+  ├─────────────────────────────────────────────────┼────────────────────────┤
+  │ Worker image builds, imports, launches chromium │ ✅                     │
+  └─────────────────────────────────────────────────┴────────────────────────┘
+
+  Two calls I made, flag if you disagree
+
+  1. case_id is optional (uploads without one still work, application_id null).
+  Say if it should be required.
+  2. Pinned playwright==1.49.0 in the worker image — the base ships browsers but
+  not the pip package in the default Python; pinning keeps package/browser
+  versions aligned. Bump both together when you upgrade.
+
+  One thing worth agreeing on before the two streams diverge: the
+  EXPECTED_FIELDS key list in extraction.py is the soft shared vocabulary the
+  extractor emits and the mapper reads. It's currently a flat list mixing
+  passport + attorney fields — worth a 5-minute pass to finalize those names so
+  both streams start from the same words.
+
+  CLAUDE.md and README.md are updated. Want me to save a project-memory note
+  capturing the seam design + the two decisions above?
+
+✻ Sautéed for 16m 11s
+
+❯ Lets not hard code to these forms. We might not need EXPECTED_FIELDS. Can we  
+  assume we will get 2 sets of dict keys to generate mapping.                   
+
+⏺ Got it — that's a cleaner design. Drop the canonical EXPECTED_FIELDS
+  vocabulary entirely: extraction returns whatever keys the LLM pulls from each
+  document (form-agnostic), and the mapper's job is purely "given two sets of 
+  dict keys — the extracted-data keys and the form's field keys — produce a
+  mapping." No shared field list to maintain, and it works against any form.
+
+  Let me find every reference to EXPECTED_FIELDS and rework them.
+
+  Searched for 2 patterns (ctrl+o to expand)
+

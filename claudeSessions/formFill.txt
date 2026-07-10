@@ -1,0 +1,954 @@
+ ▐▛███▜▌   Claude Code v2.1.206
+▝▜█████▛▘  Opus 4.8 · Claude Pro
+  ▘▘ ▝▝    ~/takehome/alma-ba
+
+
+❯ I want the browser automation,                                          
+  Here is what I have in my mind. Add a tab in UI that will let me select the   
+  case ID and enter a form url                                                  
+  It will open the form, Use LLM to extract the fields that needs to be filled  
+  and if needed type of input.                                                  
+  Generates mapping between data extracted from the uploaded files and the      
+  fields that needs to be filled and then fill the values.                      
+
+⏺ User declined to answer questions
+  ⎿  · How should the browser-automation run actually execute? The api container
+     can't run Playwright (heavy browser deps are isolated in the separate 
+     automation container by design). (Polling worker (Recommended) / Playwright
+     in api)
+     · You said 'use LLM to extract the fields.' The DOM already gives exact 
+     selectors + input types precisely; the LLM is most valuable for 
+     semantically matching your data to those fields. Which split do you want? 
+     (DOM scrape + LLM map (Recommended) / LLM identifies fields too)
+     · After the form is filled, what should the run do? (Fill + screenshot, no 
+     submit (Recommended) / Fill and submit)
+
+⏺ The user wants to clarify before answering. What would you like to clarify
+  about any of these three questions (execution model, field-detection split, or
+  what happens after fill)? I'll refine them based on what you tell me.
+
+✻ Brewed for 5m 16s
+
+❯ Wont this open a new tab/window in the browser and fill the values there?     
+
+⏺ Good question — and no, not in the way you're picturing. Let me clear up the
+  mental model, because it changes what the UI can show.
+
+  Playwright drives its own browser, server-side — not your browser. When you
+  click "Run" in the UI:
+
+  - Your browser just sends an API request and then polls for status (like the
+  document list does today).
+  - The actual form-filling happens in a separate Chromium instance that 
+  Playwright launches inside the backend container (the automation container).
+  That browser lives on the server, not on your machine. In Docker it also runs
+  headless (no visible window at all — BROWSER_HEADLESS=true).
+
+  So there's no tab that pops open in your Chrome and fills itself in front of
+  you. That's why I proposed taking a screenshot of the filled form and showing
+  it back in the UI — that screenshot is your visual proof that it worked, since
+  you can't watch the server's headless browser directly.
+
+  If you genuinely want to watch it fill live, there are a couple of options,
+  but each has a real cost:
+
+  - Screenshot after fill (what I planned) — simplest, works in Docker, gives
+  you an image of the completed form. No live viewing.
+  - Headed browser you can watch — only works if the automation runs on your Mac
+  directly (not in the container — a headless Docker container has no display).
+  Means running the worker outside Docker for demos.
+  - Live streaming (VNC / Playwright trace viewer) — you'd see the browser in
+  real time, but it's meaningfully more infrastructure to wire up.
+
+  Given all that, a few things worth deciding:
+
+  1. Is a screenshot of the filled form enough proof for you, or do you
+  specifically want to watch it fill live?
+  2. Do you care whether it runs headless-in-Docker vs. a visible browser on
+  your Mac?
+
+  Which of those matches what you had in mind? Once I know, I'll fold it into
+  the execution-model question and finalize the plan.
+
+✻ Baked for 14s
+
+❯ I want to actually see and correct the form if needed. If playwright is not   
+  the correct approach for this let me know the alternative                     
+
+⏺ Playwright is still the right tool — the issue isn't Playwright, it's where 
+  the browser runs and whether it's headless. Let me lay out the real
+  constraints and options, because "see it and correct it" pushes us in a
+  specific direction.
+
+  Why the container approach can't show you a window
+
+  A browser inside the Docker automation container has no display — there's no
+  screen for a window to appear on your Mac. That's why headless + screenshot
+  was the default. To actually watch and interact, we need one of these:
+
+  Option A — Headed browser on your Mac (run the worker locally).
+  The api still runs in Docker and enqueues the run, but the Playwright worker
+  runs as a plain Python process on your host. A real Chromium window opens on 
+  your screen, you watch it fill each field, and you can grab the mouse/keyboard
+  to correct anything and submit it yourself. Simplest path to true "watch +
+  correct." Cost: for the demo the worker runs outside Docker (playwright 
+  install chromium on the host, and we expose Postgres on 5432). Playwright
+  leaves the browser open for you instead of closing it.
+
+  Option B — Live browser streamed into the web UI (stays in Docker).
+  Run headed Chromium in the container behind a virtual display (Xvfb) + VNC +
+  noVNC, and embed that live view in a new tab of your web app via an iframe.
+  You watch and click inside the web page. Architecturally clean (everything
+  stays containerized, viewable from any machine), but it's meaningfully more
+  infrastructure to build and debug.
+
+  Option C — Correct in the UI first, then headless fill + screenshot.
+  No live browser. The backend scrapes the fields and the LLM proposes {field: 
+  value}; the UI shows that as an editable table where you fix any wrong values
+  before filling; it then fills headless and returns a screenshot. You correct
+  the data, but you don't watch or touch the live form.
+
+  Alternatives to Playwright (for completeness)
+
+  - Selenium — same story as Playwright (headed vs headless, host vs container);
+  no advantage here.
+  - Browser extension / userscript — could fill the form in your own browser
+  tab, but your web app legally can't script another website's page
+  (cross-origin), so this needs a real extension — large scope creep.
+  - Prefilled URL (query-param links) — only works for forms that support it
+  (e.g. Google Forms), breaks the form-agnostic requirement.
+  - Hosted "cloud browser" (Browserbase/Steel/browserless) — gives you an
+  embeddable live session like Option B without building VNC, but adds an
+  external paid dependency + API key.
+
+  My recommendation: Option A + the editable review table from C. You correct
+  the proposed values in your own UI (reliable, easy), then a real Chromium
+  window opens on your Mac so you watch it fill and take over to fix/submit
+  anything the automation got wrong. Best of both, least new infrastructure.
+  Playwright stays the engine.
+
+  Let me confirm the two decisions that shape the plan:
+
+⏺ User answered Claude's questions:
+  ⎿  · How do you want to see and correct the form fill? → Headed on Mac + UI 
+     review (Rec.)
+     · How should form fields be detected? → DOM scrape + LLM map (Rec.)
+
+⏺ Decisions locked in: headed Chromium on your Mac + an editable review table in
+  the UI, and DOM-scrape fields + LLM does the mapping. Let me write the plan.
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ The plan is written. Let me present it for approval.  ⎿  User rejected Claude's plan:
+     ╭─────────────────────────────────────────────────────────────────────────╮
+     │ Browser-Automation Form Fill (Stream 3)                                 │
+     │                                                                         │
+     │ Context                                                                 │
+     │                                                                         │
+     │ The repo ships stream 3 (browser automation) as a stub:                 │
+     │ backend/app/services/form_fill.py                                       │
+     │ raises NotImplementedError, an automation container exists but only     │
+     │ prints a                                                                │
+     │ scaffold message, and there's no UI to trigger a fill. The goal is to   │
+     │ make it real:                                                           │
+     │ a new Form Fill tab where you pick a Case ID and enter a form URL, the  │
+     │ system                                                                  │
+     │ detects the form's fields, the LLM maps the case's extracted            │
+     │ passport/G-28 data onto                                                 │
+     │ those fields, you review and correct the proposed values in the UI, and │
+     │ then a                                                                  │
+     │ real Chromium window opens on your Mac so you watch it fill and can     │
+     │ take over to                                                            │
+     │ fix/submit anything yourself.                                           │
+     │                                                                         │
+     │ Decisions (confirmed with user)                                         │
+     │                                                                         │
+     │ - Viewing: headed Chromium on the host (worker runs outside Docker for  │
+     │ the demo) +                                                             │
+     │ an editable review table in the web UI. Not headless-in-Docker (a       │
+     │ container has no                                                        │
+     │ display), not noVNC streaming (too much infra).                         │
+     │ - Field detection: Playwright scrapes each control's                    │
+     │ selector/label/input-type                                               │
+     │ reliably; the LLM only does the semantic mapping (data keys → form      │
+     │ fields). This                                                           │
+     │ matches the existing seam doc ("two key-sets → mapping").               │
+     │ - No auto-submit: fill, then leave the browser open for you to          │
+     │ review/correct/submit                                                   │
+     │ manually.                                                               │
+     │                                                                         │
+     │ Two-phase run (why)                                                     │
+     │                                                                         │
+     │ Review-before-fill means a run has two worker passes, so the browser is │
+     │ never held open                                                         │
+     │ across the user's think-time:                                           │
+     │ 1. detect — scrape fields (headless) + LLM propose {selector: value} →  │
+     │ status review.                                                          │
+     │ 2. fill — after you approve/edit in the UI, re-open the form headed and │
+     │ fill the                                                                │
+     │ approved values, leaving the window open. Mapping is keyed by stable    │
+     │ selector, so                                                            │
+     │ re-opening at fill time is cheap and stateless.                         │
+     │                                                                         │
+     │ Run states: detecting → review → filling → filled (+ failed).           │
+     │                                                                         │
+     │ Architecture / execution model                                          │
+     │                                                                         │
+     │ - API (Docker) only enqueues run rows and serves them — it never runs   │
+     │ Playwright                                                              │
+     │ (preserves the "no browser deps in api" convention; form_fill.py keeps  │
+     │ the lazy                                                                │
+     │ Playwright import).                                                     │
+     │ - Worker (host, for the demo) — a plain Python process polls the DB for │
+     │ runs and                                                                │
+     │ drives Playwright. Headed for the fill pass so the window shows on your │
+     │ Mac. The                                                                │
+     │ same entrypoint also runs headless inside the existing automation       │
+     │ container (CI/                                                          │
+     │ non-interactive path) — one worker, two ways to run.                    │
+     │ - Worker reads only the DB (build_application_data reads                │
+     │ extraction_results.data, no                                             │
+     │ file access), so the host worker just needs DATABASE_URL →              │
+     │ localhost:5432.                                                         │
+     │                                                                         │
+     │ Form Fill tab ──POST /api/form-fill-runs──▶ api ──▶ form_fill_runs row  │
+     │ (status=detecting)                                                      │
+     │       ▲                                                        │ polls  │
+     │       └──poll GET /api/form-fill-runs──┐          host worker ─┘        │
+     │ detect: scrape+LLM→ review                                              │
+     │    edit values, POST /{id}/approve ────┘          host worker: fill     │
+     │ headed → Chromium opens                                                 │
+     │                                                                         │
+     │ Backend changes                                                         │
+     │                                                                         │
+     │ 1. Model — backend/app/models/form_fill_run.py (new)                    │
+     │                                                                         │
+     │ - class FormFillRunStatus(str, enum.Enum): detecting, review, filling,  │
+     │ filled, failed.                                                         │
+     │ - class FormFillRun(TimestampMixin, Base) — table form_fill_runs:       │
+     │   - id uuid pk (uuid_pk()), application_id FK applications.id           │
+     │ (CASCADE),                                                              │
+     │ form_url String(2048) not null, status String(32) default detecting,    │
+     │ fields JSONB (default list) — scraped                                   │
+     │ [{selector,label,input_type,options}],                                  │
+     │ proposed_mapping JSONB (default dict), approved_mapping JSONB nullable, │
+     │ error Text nullable, application relationship.                          │
+     │ - Export in backend/app/models/__init__.py.                             │
+     │                                                                         │
+     │ 2. Migration — backend/alembic/versions/0002_form_fill_runs.py (new)    │
+     │                                                                         │
+     │ Hand-written to match the model, mirroring 0001_initial.py style (per   │
+     │ repo convention;                                                        │
+     │ new table, so a normal new migration — not folded into 0001).           │
+     │                                                                         │
+     │ 3. Schemas — backend/app/schemas/form_fill.py (new)                     │
+     │                                                                         │
+     │ FormFillRunCreate(case_id, form_url),                                   │
+     │ FormFillField(selector,label,input_type,options),                       │
+     │ FormFillApprove(mapping: dict[str,str]),                                │
+     │ FormFillRunSummary(id,case_id,form_url,status, created_at,updated_at),  │
+     │ FormFillRunOut(...fields, proposed_mapping, approved_mapping,           │
+     │ error,...) (from_attributes=True).                                      │
+     │                                                                         │
+     │ 4. Service — implement backend/app/services/form_fill.py                │
+     │                                                                         │
+     │ Replace the stub body; keep the lazy Playwright import inside methods.  │
+     │ - detect(db, run_id): load run+application →                            │
+     │ build_application_data(application) (reuse                              │
+     │ application_service) → launch Playwright headless, goto(form_url),      │
+     │ _scrape_fields(page), _map_fields(data, fields) → store                 │
+     │ fields+proposed_mapping,                                                │
+     │ status review. Errors → error + status failed (mirror                   │
+     │ ExtractionService.run).                                                 │
+     │ - fill(db, run_id): load run → launch Playwright headed (force          │
+     │ headless=False),                                                        │
+     │ goto, _apply(page, fields, run.approved_mapping), status filled, then   │
+     │ block until                                                             │
+     │ the user closes the browser window so it stays open for manual          │
+     │ review/submit.                                                          │
+     │ - _scrape_fields(page): JS evaluate over input,select,textarea →        │
+     │ {selector (prefer                                                       │
+     │ #id / [name=...]), label (label/aria-label/placeholder/name),           │
+     │ input_type, options}.                                                   │
+     │ - _map_fields(data, fields): prompt with flattened data + field list →  │
+     │ get_llm_client().complete_json(system, user) (no attachments) →         │
+     │ {selector: value}.                                                      │
+     │ Reuse existing app/services/llm.py.                                     │
+     │ - _apply(page, fields, mapping): text/email/tel/date → fill; select →   │
+     │ select_option;                                                          │
+     │ checkbox/radio → check on truthy. Use settings.browser_timeout_ms.      │
+     │                                                                         │
+     │ 5. Application service — backend/app/services/application_service.py    │
+     │                                                                         │
+     │ Add create_run(db, case_id, form_url) -> FormFillRun:                   │
+     │ get_or_create_by_case_id, set                                           │
+     │ application.form_url = form_url, create FormFillRun(status=detecting),  │
+     │ add + flush                                                             │
+     │ (caller commits). Reuses existing helper.                               │
+     │                                                                         │
+     │ 6. Routes — backend/app/api/routes/form_fill.py (new, prefix            │
+     │ /form-fill-runs)                                                        │
+     │                                                                         │
+     │ - POST "" → create_run + commit → FormFillRunOut (no BackgroundTask;    │
+     │ the worker polls).                                                      │
+     │ - GET "" → list[FormFillRunSummary], newest first.                      │
+     │ - GET "/{id}" → FormFillRunOut (include case_id via application).       │
+     │ - POST "/{id}/approve" (FormFillApprove) → guard status==review, set    │
+     │ approved_mapping + status filling, commit.                              │
+     │ - Register the router under /api in backend/app/main.py (alongside      │
+     │ documents/applications).                                                │
+     │                                                                         │
+     │ 7. Worker — backend/app/worker/form_fill_worker.py (new)                │
+     │                                                                         │
+     │ Loop with session_scope(): pick oldest detecting →                      │
+     │ form_fill_service.detect; pick                                          │
+     │ oldest filling → form_fill_service.fill; else sleep                     │
+     │ settings.worker_poll_interval_s.                                        │
+     │ Wrap each in try/except → mark run failed. Entrypoint python -m         │
+     │ app.worker.form_fill_worker.                                            │
+     │ (Single worker is fine; note SELECT ... FOR UPDATE SKIP LOCKED as the   │
+     │ multi-worker upgrade.)                                                  │
+     │                                                                         │
+     │ 8. Config — backend/app/config.py                                       │
+     │                                                                         │
+     │ Add worker_poll_interval_s: int = 2 (declare once here per convention;  │
+     │ surface in                                                              │
+     │ .env.example + docker-compose.yml). form_url, browser_headless,         │
+     │ browser_timeout_ms                                                      │
+     │ already exist. fill() forces headed regardless of browser_headless.     │
+     │                                                                         │
+     │ 9. Docker / compose                                                     │
+     │                                                                         │
+     │ - docker-compose.yml db: add ports: ["5432:5432"] so the host worker    │
+     │ can reach it.                                                           │
+     │ - automation/Dockerfile CMD →                                           │
+     │ ["python","-m","app.worker.form_fill_worker"] (headless                 │
+     │ path; keep the worker profile).                                         │
+     │                                                                         │
+     │ Frontend changes                                                        │
+     │                                                                         │
+     │ 1. frontend/src/App.tsx                                                 │
+     │                                                                         │
+     │ Add useState<"documents"|"formfill"> tab switcher (two <button>s, no    │
+     │ router — none                                                           │
+     │ exists). Render the existing Documents section or the new Form Fill     │
+     │ section.                                                                │
+     │                                                                         │
+     │ 2. frontend/src/api/client.ts                                           │
+     │                                                                         │
+     │ Add interfaces (FormFillRun, FormFillField, FormFillRunSummary) +       │
+     │ handle()-wrapped                                                        │
+     │ functions: listApplications() (GET /api/applications, for the Case ID   │
+     │ dropdown),                                                              │
+     │ createFormFillRun(caseId, formUrl) (POST JSON), listFormFillRuns(),     │
+     │ getFormFillRun(id),                                                     │
+     │ approveFormFillRun(id, mapping) (POST JSON). Mirror the existing        │
+     │ thin-wrapper pattern.                                                   │
+     │                                                                         │
+     │ 3. Components (new, styled with existing .card/.error/.badge classes)   │
+     │                                                                         │
+     │ - FormFillForm.tsx: Case ID <select> (from listApplications) + form URL │
+     │ text input +                                                            │
+     │ submit → createFormFillRun; busy/error states copied from               │
+     │ UploadForm.tsx.                                                         │
+     │ - FormFillList.tsx: reuse DocumentList polling (POLL_MS=2500, swallow   │
+     │ errors). Row +                                                          │
+     │ status badge; expand → getFormFillRun. When status==review, render an   │
+     │ editable table                                                          │
+     │ (label, input_type, value input prefilled from proposed_mapping) +      │
+     │ "Approve & Fill" →                                                      │
+     │ approveFormFillRun. When filling/filled, show a note: "Watch the        │
+     │ Chromium window on                                                      │
+     │ your machine to review/correct/submit."                                 │
+     │                                                                         │
+     │ 4. frontend/src/index.css                                               │
+     │                                                                         │
+     │ Add .badge.detecting/.review/.filling/.filled/.failed rules following   │
+     │ the existing                                                            │
+     │ status-badge color pattern.                                             │
+     │                                                                         │
+     │ Docs                                                                    │
+     │                                                                         │
+     │ Update CLAUDE.md: new form_fill_runs table + two-phase run states; the  │
+     │ headed demo                                                             │
+     │ runs the worker on the host (python -m app.worker.form_fill_worker,     │
+     │ needs                                                                   │
+     │ pip install playwright==1.49.0 && playwright install chromium,          │
+     │ DATABASE_URL →                                                          │
+     │ localhost:5432); db now publishes 5432; the automation container is the │
+     │ headless path.                                                          │
+     │                                                                         │
+     │ Verification (end-to-end)                                               │
+     │                                                                         │
+     │ 1. docker compose up --build (db now on localhost:5432; api :8000, web  │
+     │ :8080).                                                                 │
+     │ 2. Upload a passport + a G-28 under the same Case ID; wait for both to  │
+     │ reach extracted.                                                        │
+     │ 3. Provide a target form. For a safe local test, serve a simple static  │
+     │ HTML form with                                                          │
+     │ name=d inputs (e.g. python -m http.server on a sample-form.html) and    │
+     │ use that URL.                                                           │
+     │ 4. Start the host worker: cd backend, export                            │
+     │ DATABASE_URL=postgresql+psycopg://alma:alma@localhost:5432/alma,        │
+     │ export ANTHROPIC_API_KEY=..., python -m app.worker.form_fill_worker.    │
+     │ 5. In the Form Fill tab: pick the Case ID, paste the form URL, submit.  │
+     │ Watch the run go                                                        │
+     │ detecting → review.                                                     │
+     │ 6. Expand the run, verify the scraped fields + proposed values, edit    │
+     │ any wrong value, click                                                  │
+     │ Approve & Fill.                                                         │
+     │ 7. A Chromium window opens on your Mac, fills the approved values, and  │
+     │ stays open —                                                            │
+     │ confirm the values landed, correct/submit manually if desired. Run      │
+     │ status → filled.                                                        │
+     │ 8. Failure paths: bad URL / unreachable form → run status failed with   │
+     │ error shown in the UI.                                                  │
+     ╰─────────────────────────────────────────────────────────────────────────╯
+
+⏺ Got it — two solid simplifications. That collapses a lot of moving parts. One
+  important consequence I want to flag before I rewrite:
+
+  If the API launches the headed browser, the API has to run on your Mac (host),
+  not in the Docker api container — a container has no display, so no window
+  can appear. That's fine and already a supported path (the repo documents
+  running uvicorn + the vite dev server on the host). So the headed demo
+  becomes: Postgres in Docker, API via uvicorn on the host (with Playwright
+  installed there), frontend via npm run dev. I'll keep Playwright's import lazy
+  so the Docker api image still builds untouched — it just isn't the path you
+  use for this feature. Let me update the plan.
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+⏺ Plan updated with both changes: single-step fill (review happens in the live
+  browser, no UI table/approve), and the API launches Playwright directly via a
+  BackgroundTask (no separate worker). The one unavoidable consequence I baked
+  in — the API must run on the host for a visible window — is now in the plan
+  and verification steps.
+  ⎿  User rejected Claude's plan:
+     ╭─────────────────────────────────────────────────────────────────────────╮
+     │ Browser-Automation Form Fill (Stream 3)                                 │
+     │                                                                         │
+     │ Context                                                                 │
+     │                                                                         │
+     │ The repo ships stream 3 (browser automation) as a stub:                 │
+     │ backend/app/services/form_fill.py                                       │
+     │ raises NotImplementedError and there's no UI to trigger a fill. The     │
+     │ goal is to make it                                                      │
+     │ real: a new Form Fill tab where you pick a Case ID and enter a form     │
+     │ URL, the system                                                         │
+     │ figures out the form's fields and maps the case's extracted             │
+     │ passport/G-28 data onto them,                                           │
+     │ then a real Chromium window opens on your Mac with the values already   │
+     │ filled in — you                                                         │
+     │ review and correct directly in that browser and submit it yourself.     │
+     │                                                                         │
+     │ Decisions (confirmed with user)                                         │
+     │                                                                         │
+     │ - Single step, review in the live form. No two-phase detect→approve, no │
+     │ editable table                                                          │
+     │ in the web UI. One shot: detect fields → LLM map → open a headed        │
+     │ browser and fill. You                                                   │
+     │ correct/submit in the actual browser window.                            │
+     │ - The API launches Playwright directly (a FastAPI BackgroundTask,       │
+     │ mirroring how                                                           │
+     │ extraction runs) — no separate worker process/container. The HTTP       │
+     │ request returns                                                         │
+     │ immediately; the UI shows an in-progress message until the browser      │
+     │ opens and fills.                                                        │
+     │ - Field detection: Playwright scrapes each control's                    │
+     │ selector/label/input-type; the                                          │
+     │ LLM only does the semantic mapping (data keys → form fields).           │
+     │ - No auto-submit: fill, then leave the browser open for you to          │
+     │ review/correct/submit.                                                  │
+     │                                                                         │
+     │ Run states                                                              │
+     │                                                                         │
+     │ filling (detecting + mapping + opening the browser) → filled (browser   │
+     │ open with values                                                        │
+     │ in) → terminal. Plus failed.                                            │
+     │                                                                         │
+     │ Architecture / execution model                                          │
+     │                                                                         │
+     │ Because the API opens a visible browser window, the API must run on the │
+     │ host (a                                                                 │
+     │ Docker container has no display). This is the repo's already-documented │
+     │ dev path: Postgres                                                      │
+     │ in Docker, uvicorn on the host, npm run dev for the frontend.           │
+     │ Playwright's import stays                                               │
+     │ lazy inside form_fill.py, so the Docker api image is unaffected and     │
+     │ still builds; it                                                        │
+     │ just isn't the path used for this feature. (The old automation worker   │
+     │ container is now                                                        │
+     │ unused for this flow — left untouched, out of scope.)                   │
+     │                                                                         │
+     │ Form Fill tab ──POST /api/form-fill-runs──▶ API (host) ──▶              │
+     │ form_fill_runs row (status=filling)                                     │
+     │       ▲                                          │ BackgroundTask       │
+     │ (session_scope, sync)                                                   │
+     │       │  poll GET /api/form-fill-runs            ▼                      │
+     │       └───── in-progress → filled ────  Playwright headed: goto →       │
+     │ scrape → LLM map → fill                                                 │
+     │                                         → status=filled, leave Chromium │
+     │ open on your Mac                                                        │
+     │                                                                         │
+     │ The BackgroundTask runs the sync fill() in a threadpool thread (no      │
+     │ event loop there, so                                                    │
+     │ playwright.sync_api is safe) — exactly the pattern                      │
+     │ documents.py::_run_extraction already                                   │
+     │ uses with session_scope().                                              │
+     │                                                                         │
+     │ Backend changes                                                         │
+     │                                                                         │
+     │ 1. Model — backend/app/models/form_fill_run.py (new)                    │
+     │                                                                         │
+     │ - class FormFillRunStatus(str, enum.Enum): filling, filled, failed.     │
+     │ - class FormFillRun(TimestampMixin, Base) — table form_fill_runs:       │
+     │   - id uuid pk (uuid_pk()), application_id FK applications.id           │
+     │ (CASCADE),                                                              │
+     │ form_url String(2048) not null, status String(32) default filling,      │
+     │ fields JSONB (default list) — scraped                                   │
+     │ [{selector,label,input_type,options}],                                  │
+     │ mapping JSONB (default dict) — {selector: value} actually applied,      │
+     │ error Text nullable, application relationship.                          │
+     │ - Export in backend/app/models/__init__.py.                             │
+     │                                                                         │
+     │ 2. Migration — backend/alembic/versions/0002_form_fill_runs.py (new)    │
+     │                                                                         │
+     │ Hand-written to match the model, mirroring 0001_initial.py (new table → │
+     │ new migration).                                                         │
+     │                                                                         │
+     │ 3. Schemas — backend/app/schemas/form_fill.py (new)                     │
+     │                                                                         │
+     │ FormFillRunCreate(case_id, form_url),                                   │
+     │ FormFillField(selector,label,input_type,options),                       │
+     │ FormFillRunSummary(id,case_id,form_url,status,created_at,updated_at),   │
+     │ FormFillRunOut(...fields, mapping, error,...) (from_attributes=True).   │
+     │                                                                         │
+     │ 4. Service — implement backend/app/services/form_fill.py                │
+     │                                                                         │
+     │ Replace the stub body; keep the lazy Playwright import inside fill.     │
+     │ Single method                                                           │
+     │ fill(db, run_id):                                                       │
+     │ - Load run + application → build_application_data(application) (reuse   │
+     │ application_service).                                                   │
+     │ - Launch Playwright headed (headless=False), goto(run.form_url).        │
+     │ - _scrape_fields(page) → _map_fields(data, fields) → _apply(page,       │
+     │ fields, mapping).                                                       │
+     │ - Persist fields + mapping, set status filled, db.commit().             │
+     │ - Leave the window open: block (while not page.is_closed(): sleep)      │
+     │ until the user                                                          │
+     │ closes it, then return (Playwright context closes cleanly). One held    │
+     │ thread per run — fine                                                   │
+     │ for single-user demo.                                                   │
+     │ - Any exception → set error + status failed, commit (mirror             │
+     │ ExtractionService.run).                                                 │
+     │ - Helpers: _scrape_fields (JS evaluate over input,select,textarea →     │
+     │ selector [prefer                                                        │
+     │ #id/[name]], label [label/aria/placeholder/name], input_type, options); │
+     │ _map_fields                                                             │
+     │ (get_llm_client().complete_json(system, user), no attachments →         │
+     │ {selector: value},                                                      │
+     │ reuse app/services/llm.py); _apply (text/email/tel/date → fill; select  │
+     │ →                                                                       │
+     │ select_option; checkbox/radio → check on truthy; use                    │
+     │ settings.browser_timeout_ms).                                           │
+     │                                                                         │
+     │ 5. Application service — backend/app/services/application_service.py    │
+     │                                                                         │
+     │ Add create_run(db, case_id, form_url) -> FormFillRun:                   │
+     │ get_or_create_by_case_id, set                                           │
+     │ application.form_url = form_url, create FormFillRun(status=filling),    │
+     │ add + flush                                                             │
+     │ (caller commits). Reuses the existing helper.                           │
+     │                                                                         │
+     │ 6. Routes — backend/app/api/routes/form_fill.py (new, prefix            │
+     │ /form-fill-runs)                                                        │
+     │                                                                         │
+     │ - Module-level _run_form_fill(run_id) → with session_scope() as db:     │
+     │ form_fill_service.fill(db, run_id)                                      │
+     │ (copy of documents.py::_run_extraction).                                │
+     │ - POST "" (FormFillRunCreate, background: BackgroundTasks) → create_run │
+     │ + commit →                                                              │
+     │ background.add_task(_run_form_fill, run.id) → return FormFillRunOut.    │
+     │ - GET "" → list[FormFillRunSummary], newest first.                      │
+     │ - GET "/{id}" → FormFillRunOut (include case_id via application).       │
+     │ - Register the router under /api in backend/app/main.py (alongside      │
+     │ documents/applications).                                                │
+     │                                                                         │
+     │ 7. Docker / compose                                                     │
+     │                                                                         │
+     │ - docker-compose.yml db: add ports: ["5432:5432"] so the host-run API   │
+     │ can reach it.                                                           │
+     │ - No worker/automation changes. browser_timeout_ms config already       │
+     │ exists; fill() forces                                                   │
+     │ headed regardless of browser_headless.                                  │
+     │                                                                         │
+     │ Frontend changes                                                        │
+     │                                                                         │
+     │ 1. frontend/src/App.tsx                                                 │
+     │                                                                         │
+     │ Add useState<"documents"|"formfill"> tab switcher (two <button>s — no   │
+     │ router exists).                                                         │
+     │ Render the existing Documents section or the new Form Fill section.     │
+     │                                                                         │
+     │ 2. frontend/src/api/client.ts                                           │
+     │                                                                         │
+     │ Add interfaces (FormFillRun, FormFillField, FormFillRunSummary) +       │
+     │ handle()-wrapped                                                        │
+     │ functions: listApplications() (GET /api/applications, for the Case ID   │
+     │ dropdown),                                                              │
+     │ createFormFillRun(caseId, formUrl) (POST JSON), listFormFillRuns(),     │
+     │ getFormFillRun(id).                                                     │
+     │ Mirror the existing thin-wrapper pattern.                               │
+     │                                                                         │
+     │ 3. Components (new, styled with existing .card/.error/.badge classes)   │
+     │                                                                         │
+     │ - FormFillForm.tsx: Case ID <select> (from listApplications) + form URL │
+     │ text input +                                                            │
+     │ submit → createFormFillRun; busy/error states copied from               │
+     │ UploadForm.tsx.                                                         │
+     │ - FormFillList.tsx: reuse DocumentList polling (POLL_MS=2500, swallow   │
+     │ errors). Row +                                                          │
+     │ status badge; expand → getFormFillRun. While status==filling, show an   │
+     │ in-progress note                                                        │
+     │ ("Figuring out the mapping and opening the browser…"). When filled,     │
+     │ show the applied                                                        │
+     │ mapping (read-only) + "Review/correct/submit in the Chromium window on  │
+     │ your machine."                                                          │
+     │ On failed, show error.                                                  │
+     │                                                                         │
+     │ 4. frontend/src/index.css                                               │
+     │                                                                         │
+     │ Add .badge.filling/.filled/.failed rules following the existing         │
+     │ status-badge color pattern.                                             │
+     │                                                                         │
+     │ Docs                                                                    │
+     │                                                                         │
+     │ Update CLAUDE.md: new form_fill_runs table + one-shot fill flow; the    │
+     │ headed form-fill                                                        │
+     │ runs the API on the host (uvicorn, needs pip install playwright==1.49.0 │
+     │ && playwright install chromium, DATABASE_URL → localhost:5432) — the    │
+     │ Docker api container                                                    │
+     │ can't open a visible browser; db now publishes 5432.                    │
+     │                                                                         │
+     │ Verification (end-to-end)                                               │
+     │                                                                         │
+     │ 1. docker compose up --build db (or full stack) — Postgres on           │
+     │ localhost:5432.                                                         │
+     │ 2. Run the API on the host: cd backend, pip install -r requirements.txt │
+     │ playwright==1.49.0,                                                     │
+     │ playwright install chromium, export                                     │
+     │ DATABASE_URL=postgresql+psycopg://alma:alma@localhost:5432/alma,        │
+     │ export ANTHROPIC_API_KEY=..., alembic upgrade head, uvicorn             │
+     │ app.main:app --reload.                                                  │
+     │ 3. cd frontend && npm run dev (proxies /api → localhost:8000).          │
+     │ 4. Upload a passport + a G-28 under the same Case ID; wait for both to  │
+     │ reach extracted.                                                        │
+     │ 5. Provide a target form. For a safe local test, serve a simple static  │
+     │ HTML form with name=d                                                   │
+     │ inputs (python -m http.server on a sample-form.html) and use that URL.  │
+     │ 6. In the Form Fill tab: pick the Case ID, paste the form URL, submit.  │
+     │ Run shows filling                                                       │
+     │ with the in-progress message.                                           │
+     │ 7. A Chromium window opens on your Mac with the mapped values filled in │
+     │ and stays open —                                                        │
+     │ confirm the values, correct/submit manually. Run status → filled,       │
+     │ mapping shown read-only.                                                │
+     │ 8. Failure path: bad/unreachable URL → run failed with error surfaced   │
+     │ in the UI.                                                              │
+     ╰─────────────────────────────────────────────────────────────────────────╯
+
+⏺ Fair question, and my honest answer: you don't need to get rid of Docker, and 
+  SQLite isn't worth the blast radius here.
+
+  A few things worth separating:
+
+  - You're not "keeping Docker for the whole app" — just the DB. docker compose 
+  up -d db is one command, zero code changes, and it's already wired up. The
+  API-on-host + DB-in-Docker split isn't extra complexity from this feature;
+  it's the standard dev loop the repo already documents. The split exists only
+  because the headed browser needs a display — that's unavoidable regardless of
+  which DB you pick.
+  - What SQLite actually buys you: it removes that one docker compose up -d db
+  command, so you could run the demo with no Docker at all (just uvicorn + npm 
+  run dev + a local .db file).
+  - What it costs: it's a repo-wide persistence change, not a form-fill change.
+  The existing models use Postgres JSONB (extraction_results.data, and my new
+  fields/mapping columns), and 0001_initial.py is a hand-written Postgres
+  migration. To run on SQLite you'd swap every JSONB to a portable JSON type and
+  rewrite/guard the migration — touching the already-working upload +
+  extraction flow that this take-home deliberately built on Postgres. That's
+  real risk for the reward of avoiding one command.
+
+  Functionally SQLite would work (we only store/read JSON dicts, no JSON
+  querying), so it's not impossible — I just don't think trading a one-line
+  docker compose up -d db for a foundation rewrite is a good deal.
+
+  Which way do you want to go?
+
+⏺ User answered Claude's questions:
+  ⎿  · How should the local DB run for the headed form-fill demo? → Postgres in 
+     Docker (Rec.)
+
+⏺ Postgres in Docker it is — the plan already reflects that (docker compose up 
+  -d db, expose 5432, API + frontend on the host). No changes needed. Presenting
+  the plan for approval.
+  ⎿  User rejected Claude's plan:
+     ╭─────────────────────────────────────────────────────────────────────────╮
+     │ Browser-Automation Form Fill (Stream 3)                                 │
+     │                                                                         │
+     │ Context                                                                 │
+     │                                                                         │
+     │ The repo ships stream 3 (browser automation) as a stub:                 │
+     │ backend/app/services/form_fill.py                                       │
+     │ raises NotImplementedError and there's no UI to trigger a fill. The     │
+     │ goal is to make it                                                      │
+     │ real: a new Form Fill tab where you pick a Case ID and enter a form     │
+     │ URL, the system                                                         │
+     │ figures out the form's fields and maps the case's extracted             │
+     │ passport/G-28 data onto them,                                           │
+     │ then a real Chromium window opens on your Mac with the values already   │
+     │ filled in — you                                                         │
+     │ review and correct directly in that browser and submit it yourself.     │
+     │                                                                         │
+     │ Decisions (confirmed with user)                                         │
+     │                                                                         │
+     │ - Single step, review in the live form. No two-phase detect→approve, no │
+     │ editable table                                                          │
+     │ in the web UI. One shot: detect fields → LLM map → open a headed        │
+     │ browser and fill. You                                                   │
+     │ correct/submit in the actual browser window.                            │
+     │ - The API launches Playwright directly (a FastAPI BackgroundTask,       │
+     │ mirroring how                                                           │
+     │ extraction runs) — no separate worker process/container. The HTTP       │
+     │ request returns                                                         │
+     │ immediately; the UI shows an in-progress message until the browser      │
+     │ opens and fills.                                                        │
+     │ - Field detection: Playwright scrapes each control's                    │
+     │ selector/label/input-type; the                                          │
+     │ LLM only does the semantic mapping (data keys → form fields).           │
+     │ - No auto-submit: fill, then leave the browser open for you to          │
+     │ review/correct/submit.                                                  │
+     │                                                                         │
+     │ Run states                                                              │
+     │                                                                         │
+     │ filling (detecting + mapping + opening the browser) → filled (browser   │
+     │ open with values                                                        │
+     │ in) → terminal. Plus failed.                                            │
+     │                                                                         │
+     │ Architecture / execution model                                          │
+     │                                                                         │
+     │ Because the API opens a visible browser window, the API must run on the │
+     │ host (a                                                                 │
+     │ Docker container has no display). This is the repo's already-documented │
+     │ dev path: Postgres                                                      │
+     │ in Docker, uvicorn on the host, npm run dev for the frontend.           │
+     │ Playwright's import stays                                               │
+     │ lazy inside form_fill.py, so the Docker api image is unaffected and     │
+     │ still builds; it                                                        │
+     │ just isn't the path used for this feature. (The old automation worker   │
+     │ container is now                                                        │
+     │ unused for this flow — left untouched, out of scope.)                   │
+     │                                                                         │
+     │ Form Fill tab ──POST /api/form-fill-runs──▶ API (host) ──▶              │
+     │ form_fill_runs row (status=filling)                                     │
+     │       ▲                                          │ BackgroundTask       │
+     │ (session_scope, sync)                                                   │
+     │       │  poll GET /api/form-fill-runs            ▼                      │
+     │       └───── in-progress → filled ────  Playwright headed: goto →       │
+     │ scrape → LLM map → fill                                                 │
+     │                                         → status=filled, leave Chromium │
+     │ open on your Mac                                                        │
+     │                                                                         │
+     │ The BackgroundTask runs the sync fill() in a threadpool thread (no      │
+     │ event loop there, so                                                    │
+     │ playwright.sync_api is safe) — exactly the pattern                      │
+     │ documents.py::_run_extraction already                                   │
+     │ uses with session_scope().                                              │
+     │                                                                         │
+     │ Backend changes                                                         │
+     │                                                                         │
+     │ 1. Model — backend/app/models/form_fill_run.py (new)                    │
+     │                                                                         │
+     │ - class FormFillRunStatus(str, enum.Enum): filling, filled, failed.     │
+     │ - class FormFillRun(TimestampMixin, Base) — table form_fill_runs:       │
+     │   - id uuid pk (uuid_pk()), application_id FK applications.id           │
+     │ (CASCADE),                                                              │
+     │ form_url String(2048) not null, status String(32) default filling,      │
+     │ fields JSONB (default list) — scraped                                   │
+     │ [{selector,label,input_type,options}],                                  │
+     │ mapping JSONB (default dict) — {selector: value} actually applied,      │
+     │ error Text nullable, application relationship.                          │
+     │ - Export in backend/app/models/__init__.py.                             │
+     │                                                                         │
+     │ 2. Migration — backend/alembic/versions/0002_form_fill_runs.py (new)    │
+     │                                                                         │
+     │ Hand-written to match the model, mirroring 0001_initial.py (new table → │
+     │ new migration).                                                         │
+     │                                                                         │
+     │ 3. Schemas — backend/app/schemas/form_fill.py (new)                     │
+     │                                                                         │
+     │ FormFillRunCreate(case_id, form_url),                                   │
+     │ FormFillField(selector,label,input_type,options),                       │
+     │ FormFillRunSummary(id,case_id,form_url,status,created_at,updated_at),   │
+     │ FormFillRunOut(...fields, mapping, error,...) (from_attributes=True).   │
+     │                                                                         │
+     │ 4. Service — implement backend/app/services/form_fill.py                │
+     │                                                                         │
+     │ Replace the stub body; keep the lazy Playwright import inside fill.     │
+     │ Single method                                                           │
+     │ fill(db, run_id):                                                       │
+     │ - Load run + application → build_application_data(application) (reuse   │
+     │ application_service).                                                   │
+     │ - Launch Playwright headed (headless=False), goto(run.form_url).        │
+     │ - _scrape_fields(page) → _map_fields(data, fields) → _apply(page,       │
+     │ fields, mapping).                                                       │
+     │ - Persist fields + mapping, set status filled, db.commit().             │
+     │ - Leave the window open: block (while not page.is_closed(): sleep)      │
+     │ until the user                                                          │
+     │ closes it, then return (Playwright context closes cleanly). One held    │
+     │ thread per run — fine                                                   │
+     │ for single-user demo.                                                   │
+     │ - Any exception → set error + status failed, commit (mirror             │
+     │ ExtractionService.run).                                                 │
+     │ - Helpers: _scrape_fields (JS evaluate over input,select,textarea →     │
+     │ selector [prefer                                                        │
+     │ #id/[name]], label [label/aria/placeholder/name], input_type, options); │
+     │ _map_fields                                                             │
+     │ (get_llm_client().complete_json(system, user), no attachments →         │
+     │ {selector: value},                                                      │
+     │ reuse app/services/llm.py); _apply (text/email/tel/date → fill; select  │
+     │ →                                                                       │
+     │ select_option; checkbox/radio → check on truthy; use                    │
+     │ settings.browser_timeout_ms).                                           │
+     │                                                                         │
+     │ 5. Application service — backend/app/services/application_service.py    │
+     │                                                                         │
+     │ Add create_run(db, case_id, form_url) -> FormFillRun:                   │
+     │ get_or_create_by_case_id, set                                           │
+     │ application.form_url = form_url, create FormFillRun(status=filling),    │
+     │ add + flush                                                             │
+     │ (caller commits). Reuses the existing helper.                           │
+     │                                                                         │
+     │ 6. Routes — backend/app/api/routes/form_fill.py (new, prefix            │
+     │ /form-fill-runs)                                                        │
+     │                                                                         │
+     │ - Module-level _run_form_fill(run_id) → with session_scope() as db:     │
+     │ form_fill_service.fill(db, run_id)                                      │
+     │ (copy of documents.py::_run_extraction).                                │
+     │ - POST "" (FormFillRunCreate, background: BackgroundTasks) → create_run │
+     │ + commit →                                                              │
+     │ background.add_task(_run_form_fill, run.id) → return FormFillRunOut.    │
+     │ - GET "" → list[FormFillRunSummary], newest first.                      │
+     │ - GET "/{id}" → FormFillRunOut (include case_id via application).       │
+     │ - Register the router under /api in backend/app/main.py (alongside      │
+     │ documents/applications).                                                │
+     │                                                                         │
+     │ 7. Docker / compose                                                     │
+     │                                                                         │
+     │ - docker-compose.yml db: add ports: ["5432:5432"] so the host-run API   │
+     │ can reach it.                                                           │
+     │ - No worker/automation changes. browser_timeout_ms config already       │
+     │ exists; fill() forces                                                   │
+     │ headed regardless of browser_headless.                                  │
+     │                                                                         │
+     │ Frontend changes                                                        │
+     │                                                                         │
+     │ 1. frontend/src/App.tsx                                                 │
+     │                                                                         │
+     │ Add useState<"documents"|"formfill"> tab switcher (two <button>s — no   │
+     │ router exists).                                                         │
+     │ Render the existing Documents section or the new Form Fill section.     │
+     │                                                                         │
+     │ 2. frontend/src/api/client.ts                                           │
+     │                                                                         │
+     │ Add interfaces (FormFillRun, FormFillField, FormFillRunSummary) +       │
+     │ handle()-wrapped                                                        │
+     │ functions: listApplications() (GET /api/applications, for the Case ID   │
+     │ dropdown),                                                              │
+     │ createFormFillRun(caseId, formUrl) (POST JSON), listFormFillRuns(),     │
+     │ getFormFillRun(id).                                                     │
+     │ Mirror the existing thin-wrapper pattern.                               │
+     │                                                                         │
+     │ 3. Components (new, styled with existing .card/.error/.badge classes)   │
+     │                                                                         │
+     │ - FormFillForm.tsx: Case ID <select> (from listApplications) + form URL │
+     │ text input +                                                            │
+     │ submit → createFormFillRun; busy/error states copied from               │
+     │ UploadForm.tsx.                                                         │
+     │ - FormFillList.tsx: reuse DocumentList polling (POLL_MS=2500, swallow   │
+     │ errors). Row +                                                          │
+     │ status badge; expand → getFormFillRun. While status==filling, show an   │
+     │ in-progress note                                                        │
+     │ ("Figuring out the mapping and opening the browser…"). When filled,     │
+     │ show the applied                                                        │
+     │ mapping (read-only) + "Review/correct/submit in the Chromium window on  │
+     │ your machine."                                                          │
+     │ On failed, show error.                                                  │
+     │                                                                         │
+     │ 4. frontend/src/index.css                                               │
+     │                                                                         │
+     │ Add .badge.filling/.filled/.failed rules following the existing         │
+     │ status-badge color pattern.                                             │
+     │                                                                         │
+     │ Docs                                                                    │
+     │                                                                         │
+     │ Update CLAUDE.md: new form_fill_runs table + one-shot fill flow; the    │
+     │ headed form-fill                                                        │
+     │ runs the API on the host (uvicorn, needs pip install playwright==1.49.0 │
+     │ && playwright install chromium, DATABASE_URL → localhost:5432) — the    │
+     │ Docker api container                                                    │
+     │ can't open a visible browser; db now publishes 5432.                    │
+     │                                                                         │
+     │ Verification (end-to-end)                                               │
+     │                                                                         │
+     │ 1. docker compose up --build db (or full stack) — Postgres on           │
+     │ localhost:5432.                                                         │
+     │ 2. Run the API on the host: cd backend, pip install -r requirements.txt │
+     │ playwright==1.49.0,                                                     │
+     │ playwright install chromium, export                                     │
+     │ DATABASE_URL=postgresql+psycopg://alma:alma@localhost:5432/alma,        │
+     │ export ANTHROPIC_API_KEY=..., alembic upgrade head, uvicorn             │
+     │ app.main:app --reload.                                                  │
+     │ 3. cd frontend && npm run dev (proxies /api → localhost:8000).          │
+     │ 4. Upload a passport + a G-28 under the same Case ID; wait for both to  │
+     │ reach extracted.                                                        │
+     │ 5. Provide a target form. For a safe local test, serve a simple static  │
+     │ HTML form with name=d                                                   │
+     │ inputs (python -m http.server on a sample-form.html) and use that URL.  │
+     │ 6. In the Form Fill tab: pick the Case ID, paste the form URL, submit.  │
+     │ Run shows filling                                                       │
+     │ with the in-progress message.                                           │
+     │ 7. A Chromium window opens on your Mac with the mapped values filled in │
+     │ and stays open —                                                        │
+     │ confirm the values, correct/submit manually. Run status → filled,       │
+     │ mapping shown read-only.                                                │
+     │ 8. Failure path: bad/unreachable URL → run failed with error surfaced   │
+     │ in the UI.                                                              │
+     ╰─────────────────────────────────────────────────────────────────────────╯
+
+⏺ The plan is saved at
+  /Users/obuli/.claude/plans/i-want-the-browser-majestic-blossom.md. I'll leave
+  it there and not start implementation.
+
+  Quick recap of what it captures:
+  - Form Fill tab in the UI (Case ID dropdown + form URL) — one-shot fill,
+  review/correct in the live browser (no UI approval table).
+  - API launches Playwright directly via a BackgroundTask (mirrors extraction) —
+  no separate worker. UI polls and shows an in-progress message until the
+  browser opens.
+  - DOM scrape for fields + LLM for the mapping; headed Chromium opens on your
+  Mac with values filled, left open for you to submit.
+  - Postgres in Docker (docker compose up -d db, expose 5432); API + frontend 
+  run on the host so the visible browser can appear.
+  - New form_fill_runs table + migration 0002, service/route/schema, and
+  frontend components — with an end-to-end verification section.
+
+  Whenever you're ready to build it, just say the word.
+
+✻ Churned for 6m 43s
+
+※ recap: Goal: build a Form Fill tab that opens a headed browser and auto-fills a form from a case's extracted data. The plan is saved and approved-pending. Next action: start implementing the backend `form_fill_runs` model and migration. (disable recaps in /config)
+
