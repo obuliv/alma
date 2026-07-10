@@ -1,7 +1,9 @@
 """Provider-agnostic LLM client shared by both workstreams.
 
-- Stream 2 (extraction): `complete_json(system, user, attachments=<doc files>)`
-  where attachments are the passport/G-28 images or PDFs.
+- Stream 2 (extraction): `complete_vision(system, user, attachments=<doc files>)`
+  transcribes a scanned passport/G-28 page to text (the "llm" OCR mode; see
+  `app.services.ocr`), then `complete_json(system, user)` turns that text into
+  a flat key/value dict.
 - Stream 3 (form-fill mapping): `complete_json(system, user)` with the form's
   fields + the merged application data, returning `{form_field: value}`.
 
@@ -27,6 +29,12 @@ class LLMClient(ABC):
     @abstractmethod
     def complete(self, system: str, user: str) -> str:
         """Return the model's text response."""
+
+    @abstractmethod
+    def complete_vision(
+        self, system: str, user: str, attachments: list[Attachment] | None = None
+    ) -> str:
+        """Return the model's text response, with image/PDF attachments."""
 
     @abstractmethod
     def complete_json(
@@ -90,6 +98,11 @@ class AnthropicLLMClient(LLMClient):
 
     def complete(self, system: str, user: str) -> str:
         return self._call(system, [{"type": "text", "text": user}])
+
+    def complete_vision(
+        self, system: str, user: str, attachments: list[Attachment] | None = None
+    ) -> str:
+        return self._call(system, self._build_content(user, attachments))
 
     def complete_json(
         self, system: str, user: str, attachments: list[Attachment] | None = None

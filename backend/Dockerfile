@@ -5,6 +5,13 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# libGL/libglib: required by opencv-python, a transitive dep of
+# rapidocr-onnxruntime (the local OCR engine, OCR_MODE=rapidocr).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

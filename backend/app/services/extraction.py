@@ -1,26 +1,76 @@
-"""Extraction service — STUB (step 2 lands the real OCR/LLM logic here).
+"""Extraction service.
 
-The upload flow already drives status transitions and persists an
-ExtractionResult, so step 2 only needs to replace `_extract` with real logic
-that reads a document's files and returns a `data` dict.
+The upload flow drives status transitions and persists an ExtractionResult;
+`_extract` reads a document's files and returns `(data, raw_text)`.
 
 Form-agnostic by design: extraction returns **whatever keys the LLM finds** in
 the document — there is no fixed field list. The fill-time mapper (stream 3)
 takes these keys and the target form's field keys and generates the mapping, so
 neither side is tied to a specific form or schema.
 
-Wiring for stream 2 is in place: read a document's files via
-`app.services.storage.read_file`, pass them as attachments to
-`get_llm_client().complete_json(...)`, and return the parsed dict.
+Pipeline, per document, uniform regardless of `settings.ocr_mode`:
+1. Reduce every file to text: a PDF's embedded text layer if it has one
+   (`app.services.text_extraction`), otherwise the configured OCR engine
+   (`app.services.ocr.get_ocr_engine()`) on the rasterized/raw page images.
+   For PDFs, filled AcroForm field values are always merged in too — a
+   fillable PDF's answers live in form-field widgets, not the page's text
+   stream, so the text layer alone sees only the blank template.
+2. Concatenate into `raw_text`, then one `complete_json` call turns it into
+   the flat key/value `data` dict.
 """
 import uuid
 
 from sqlalchemy.orm import Session
 
+from app.core.errors import ExtractionError
 from app.core.logging import get_logger
 from app.models import Document, DocumentStatus, ExtractionResult
+from app.services import storage, text_extraction
+from app.services.llm import get_llm_client
+from app.services.ocr import get_ocr_engine
 
 logger = get_logger(__name__)
+
+_PASSPORT_SYSTEM = (
+    "You are extracting structured data from the transcribed text of a "
+    "passport's biographic page. Return a single flat JSON object with every "
+    "field you can identify, using clear snake_case keys — for example "
+    "surname, given_names, passport_number, nationality, date_of_birth, sex, "
+    "place_of_birth, date_of_issue, date_of_expiry, issuing_authority. "
+    "Include any additional fields present in the text even if not listed "
+    "here. Omit fields you cannot find; do not guess or hallucinate values."
+)
+
+_G28_SYSTEM = (
+    "You are extracting structured data from the transcribed text of a "
+    "USCIS Form G-28 (Notice of Entry of Appearance as Attorney). Return a "
+    "single flat JSON object with every field you can identify, using clear "
+    "snake_case keys — for example attorney_name, attorney_bar_number, "
+    "law_firm_name, client_family_name, client_given_name, client_address, "
+    "uscis_online_account_number, case_type. Include any additional fields "
+    "present in the text even if not listed here. Omit fields you cannot "
+    "find; do not guess or hallucinate values."
+)
+
+# Appended to every doc-type prompt: `form_field_text` (text_extraction.py)
+# renders each PDF checkbox/radio widget as a `name: true`/`name: false`
+# line, checked or not, so this is a fixed, learnable convention rather than
+# a per-document guess.
+_FORM_FIELD_BOOLEAN_NOTE = (
+    " The text may include a \"Form field values\" section. Lines there "
+    "formatted as `field_name: true` or `field_name: false` are checkboxes "
+    "or radio options — render these as JSON boolean values (true/false), "
+    "not strings, keyed by a snake_case name derived from the field's "
+    "context (nearby label text), not the raw field_name."
+)
+
+_PASSPORT_SYSTEM += _FORM_FIELD_BOOLEAN_NOTE
+_G28_SYSTEM += _FORM_FIELD_BOOLEAN_NOTE
+
+_SYSTEM_PROMPTS = {
+    "passport": _PASSPORT_SYSTEM,
+    "g28": _G28_SYSTEM,
+}
 
 
 class ExtractionService:
@@ -38,7 +88,7 @@ class ExtractionService:
 
         try:
             data, raw_text = self._extract(db, document)
-        except Exception as exc:  # noqa: BLE001 - stub records any failure
+        except Exception as exc:  # noqa: BLE001 - record any failure as `failed`
             self._store(db, document, data={}, raw_text=None, error=str(exc))
             document.status = DocumentStatus.failed.value
             db.commit()
@@ -49,19 +99,36 @@ class ExtractionService:
         db.commit()
 
     def _extract(self, db: Session, document: Document) -> tuple[dict, str | None]:
-        """STUB: return an empty dict. Replace with OCR/LLM in step 2.
+        """Reduce every file to text, then turn the combined text into JSON."""
+        page_texts = [self._file_to_text(f) for f in document.files]
+        raw_text = "\n\n---\n\n".join(text for text in page_texts if text.strip())
+        if not raw_text.strip():
+            raise ExtractionError(
+                f"No text could be extracted from document {document.id}"
+            )
 
-        Stream 2 replaces this body with, roughly:
-            client = get_llm_client()
-            attachments = [(storage.read_file(f.file_path), f.content_type)
-                           for f in document.files]
-            data = client.complete_json(system=<prompt for doc_type>,
-                                        user="Extract all fields as JSON.",
-                                        attachments=attachments)
-        `data` keys are whatever the LLM returns — no fixed schema.
-        """
-        logger.info("extraction stub for document %s (%s)", document.id, document.doc_type)
-        return {}, None
+        try:
+            system = _SYSTEM_PROMPTS[document.doc_type]
+        except KeyError:
+            raise ExtractionError(f"No extraction prompt for doc_type {document.doc_type!r}")
+        client = get_llm_client()
+        data = client.complete_json(system=system, user=raw_text)
+        return data, raw_text
+
+    def _file_to_text(self, file) -> str:
+        """Text layer (+ filled AcroForm fields) for a PDF; OCR otherwise."""
+        content = storage.read_file(file.file_path)
+        if file.content_type == "application/pdf":
+            text = text_extraction.pdf_text_layer(content)
+            if not text_extraction.has_text_layer(text):
+                images = text_extraction.rasterize_pdf(content)
+                text = get_ocr_engine().image_to_text(images)
+            form_fields = text_extraction.form_field_text(content)
+            if form_fields:
+                text = f"{text}\n\nForm field values:\n{form_fields}"
+            return text
+        images = [content]
+        return get_ocr_engine().image_to_text(images)
 
     def _store(
         self,
