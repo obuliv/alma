@@ -19,6 +19,7 @@ class DocumentStatus(str, enum.Enum):
     extracting = "extracting"
     extracted = "extracted"
     failed = "failed"
+    flagged = "flagged"
 
 
 class Document(TimestampMixin, Base):

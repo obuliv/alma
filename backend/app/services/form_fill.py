@@ -34,11 +34,19 @@ _POLL_S = 1.0
 _MAP_SYSTEM_PROMPT = (
     "You map extracted applicant data onto a target web form's fields. Given "
     "the applicant's data (grouped by document type) and the form's fields "
-    "(selector, label, input_type, options), return a single JSON object "
-    "mapping each field's selector to the value that should be typed/selected "
-    "into it. Only include selectors you are confident about; omit fields you "
-    "cannot map. For 'select' fields, the value must be one of the given "
-    "options. For checkboxes/radios, use \"true\" or \"false\"."
+    "(selector, label, input_type, options), return a single JSON object with "
+    "two keys: \"mapping\", an object of {selector: value} giving the value "
+    "that should be typed/selected into each field, and \"field_sources\", an "
+    "object of {selector: source_key} naming the dotted path of the "
+    "applicant-data key each value was taken from (e.g. "
+    "\"passport.date_of_birth\", or a short description if it was combined "
+    "from more than one key). \"mapping\" and \"field_sources\" must have "
+    "exactly the same set of selector keys. Only include selectors you are "
+    "confident about; omit fields you cannot map. For 'select' fields, the "
+    "value must be one of the given options. For checkboxes/radios, use "
+    "\"true\" or \"false\". For 'date' fields, the value must be reformatted "
+    "to ISO 8601 \"YYYY-MM-DD\" regardless of what format the source data "
+    "uses — native date inputs silently reject any other format."
 )
 
 
@@ -154,19 +162,55 @@ class FormFillService:
         user = (
             f"Applicant data:\n{json.dumps(data)}\n\n"
             f"Form fields:\n{json.dumps(fields)}\n\n"
-            "Respond with {selector: value}."
+            'Respond with {"mapping": {selector: value}, '
+            '"field_sources": {selector: source_key}}.'
+        )
+        logger.debug("form-fill: applicant data sent to mapper:\n%s", json.dumps(data, indent=2))
+        logger.debug(
+            "form-fill: %d scraped field(s) sent to mapper:\n%s",
+            len(fields),
+            json.dumps(fields, indent=2),
         )
         try:
-            return get_llm_client().complete_json(_MAP_SYSTEM_PROMPT, user)
+            result = get_llm_client().complete_json(_MAP_SYSTEM_PROMPT, user)
         except Exception as exc:
             raise FormFillError(f"Field-mapping LLM call failed: {exc}") from exc
+
+        mapping = result.get("mapping", {})
+        field_sources = result.get("field_sources", {})
+
+        # Log which form field maps to which source data field, not the
+        # values themselves — mapped values are PII (names, passport
+        # numbers, DOB, ...); full values are still available at DEBUG for
+        # anyone who explicitly opts into that.
+        by_selector = {f["selector"]: f for f in fields}
+        correspondence = "\n".join(
+            f"  {selector} (\"{by_selector.get(selector, {}).get('label', '')}\") <- {field_sources.get(selector, '?')}"
+            for selector in mapping
+        )
+        logger.info(
+            "form-fill: LLM generated mapping for %d/%d field(s); form field <- data field:\n%s",
+            len(mapping),
+            len(fields),
+            correspondence,
+        )
+        logger.debug("form-fill: mapping with values:\n%s", json.dumps(mapping, indent=2))
+        unmapped = [f["selector"] for f in fields if f["selector"] not in mapping]
+        if unmapped:
+            logger.info("form-fill: %d scraped field(s) left unmapped by the LLM: %s", len(unmapped), unmapped)
+        return mapping
 
     def _apply(self, page, fields: list[dict], mapping: dict) -> None:
         by_selector = {f["selector"]: f for f in fields}
         timeout = settings.browser_timeout_ms
+        filled, skipped = 0, []
         for selector, value in mapping.items():
             field = by_selector.get(selector)
-            if field is None or value is None:
+            if field is None:
+                skipped.append((selector, "no scraped field with this selector"))
+                continue
+            if value is None:
+                skipped.append((selector, "mapped value was null"))
                 continue
             try:
                 if field["input_type"] == "select":
@@ -176,8 +220,16 @@ class FormFillService:
                     (page.check if truthy else page.uncheck)(selector, timeout=timeout)
                 else:
                     page.fill(selector, str(value), timeout=timeout)
+                filled += 1
+                logger.debug("form-fill: filled %s (%s) = %r", selector, field["input_type"], value)
             except Exception as exc:  # noqa: BLE001 - skip fields that fail to fill
-                logger.warning("form-fill: could not apply %s -> %r: %s", selector, value, exc)
+                skipped.append((selector, str(exc)))
+                logger.warning("form-fill: could not apply %s: %s", selector, exc)
+                logger.debug("form-fill: failed value for %s was %r", selector, value)
+
+        logger.info("form-fill: applied %d/%d mapped field(s)", filled, len(mapping))
+        if skipped:
+            logger.info("form-fill: %d mapped field(s) could not be applied: %s", len(skipped), skipped)
 
 
 form_fill_service = FormFillService()

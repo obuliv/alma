@@ -86,12 +86,32 @@ async def create_document(
             status_code=status.HTTP_400_BAD_REQUEST, detail="case_id is required."
         )
     doc_type_value = _parse_doc_type(doc_type)
-
-    document = Document(doc_type=doc_type_value, status=DocumentStatus.uploaded.value)
     application = get_or_create_by_case_id(db, case_id.strip())
-    document.application_id = application.id
-    db.add(document)
-    db.flush()  # assign document.id before saving files
+
+    # One document per (case, doc_type): re-uploading replaces the previous
+    # files/extraction for that slot rather than piling up sibling documents
+    # (which would also silently break application_service.build_application_data,
+    # since it keys the merged view by doc_type).
+    document = db.execute(
+        select(Document).where(
+            Document.application_id == application.id,
+            Document.doc_type == doc_type_value,
+        )
+    ).scalar_one_or_none()
+
+    if document is not None:
+        for existing_file in list(document.files):
+            storage.delete_file(existing_file.file_path)
+            db.delete(existing_file)
+        if document.extraction is not None:
+            db.delete(document.extraction)
+        document.status = DocumentStatus.uploaded.value
+        db.flush()
+    else:
+        document = Document(doc_type=doc_type_value, status=DocumentStatus.uploaded.value)
+        document.application_id = application.id
+        db.add(document)
+        db.flush()  # assign document.id before saving files
 
     await _persist_files(db, document, files, start_order=0)
     db.commit()
